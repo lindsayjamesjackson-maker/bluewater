@@ -101,14 +101,23 @@ Position*. Each decimal pair was checked against the degrees-decimal-minutes on 
 same record. **They are still not live.** FADs are moored, not fixed: they break away,
 get retrieved and get moved. The app links to the official listing from Settings.
 
-### Surface current
+### Wind, gusts and current — the timeline
 
-Arrows over the visible area, sampled on a grid, coloured and sized by speed. This is
-broad-scale ocean current from a global model.
+A Windy-style scrubber sits above the map buttons: bars for forecast wind speed over
+the next 24 hours, coloured by strength, with a pale line for gusts on top and a
+day/night shading behind them. Drag the dot (or tap **Now** to snap back) and the
+Conditions cards update to that hour, and — if the arrow layers are turned on in
+Settings — the wind and current arrows on the map redraw for that hour too, after a
+short pause so it isn't refetching on every pixel of drag.
 
-It is **not** the tidal stream. Inshore of Broome on a big tide the tide is what moves
-the water, by a wide margin, and this layer will not show it. Read the arrows as
-background drift and read the tide tab for the run.
+Both arrow layers are grid-sampled over the visible area, coloured and sized by speed.
+Wind is a standard forecast model, updated hourly, and does change meaningfully through
+the day — that's the point of the slider. Current does too, but the current layer is a
+**broad-scale ocean current** from a global model, not the tidal stream. Inshore of
+Broome on a big tide, the tide is what actually moves the water, by a wide margin, and
+this layer won't show that. Read the current arrows as background drift and read the
+**Tide** tab — which does capture Broome's real swing from harmonic constituents — for
+the run.
 
 ### Marine cartography
 
@@ -118,6 +127,14 @@ overlay.
 
 None of this is an official chart. No soundings you should trust, no hazard data, no
 survey authority behind it. It is for orientation. The plotter is for navigation.
+
+There's no free, publicly-embeddable source that matches Navionics' own SonarChart
+detail — that data is licensed to chartplotter makers, not available as a map tile
+service for a small app like this. GEBCO and the AusBathyTopo national grid (Geoscience
+Australia) are both around 250m resolution — the best open bathymetry there is for this
+coastline, and already what's in the Bathymetry layer, but a step below what Navionics
+shows in popular, well-sounded areas. Marks you save here export as GPX, which does
+open straight into Navionics if you want the two working together.
 
 ### Imagery freshness
 

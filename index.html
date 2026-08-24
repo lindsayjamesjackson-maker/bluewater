@@ -105,6 +105,25 @@
   </div>
 </div>
 
+<!-- wind / current timeline -->
+<div id="timeline" class="timeline">
+  <button id="tlToggle" class="tl-toggle" aria-label="Collapse timeline">
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+  </button>
+  <div class="tl-body">
+    <div class="tl-head">
+      <span class="tl-label">Wind &amp; current</span>
+      <span id="tlTime" class="tl-time">Now</span>
+      <button id="tlNow" class="tl-nowbtn">Now</button>
+    </div>
+    <div class="tl-graphwrap">
+      <canvas id="tlGraph" height="46"></canvas>
+      <div id="tlHead" class="tl-playhead"></div>
+    </div>
+    <input type="range" id="tlSlider" class="tl-slider" min="0" max="23" value="0" step="1" aria-label="Forecast hour">
+  </div>
+</div>
+
 <!-- floating buttons -->
 <div id="fabs">
   <button id="btnBreak" class="fab" title="Break finder" aria-label="Break finder">
@@ -148,9 +167,10 @@
     <input type="range" id="thresh" min="1" max="25" value="8">
     <div class="hint" id="breakHint">Measures how fast the layer changes across distance and paints the fastest&#8209;changing water. The slider sets how much of what you can see gets highlighted, so it finds the strongest edges on screen whatever the layer or season.</div>
 
-    <h3>Surface current</h3>
+    <h3>Wind &amp; current arrows</h3>
+    <label class="sw"><input type="checkbox" id="windOn"> <span>Wind arrows</span></label>
     <label class="sw"><input type="checkbox" id="currentOn"> <span>Current arrows</span></label>
-    <div class="hint">Broad&#8209;scale ocean current from a global model. It does <b>not</b> show the tidal stream, which is what actually moves the water inshore of Broome on a big tide. Read it as background drift, not the run.</div>
+    <div class="hint">Both are forecast model output, and both follow the timeline scrubber above the map buttons — drag it to see wind and current change through the day. Current is a broad&#8209;scale ocean model. It does <b>not</b> show the tidal stream, which is what actually moves the water inshore of Broome on a big tide — read it as background drift, not the run. For that, use the Tide tab, which does capture Broome's real tidal swing.</div>
 
     <h3>Marine cartography</h3>
     <label class="sw"><input type="checkbox" id="bathyOn" checked> <span>Bathymetry &amp; contours</span></label>
