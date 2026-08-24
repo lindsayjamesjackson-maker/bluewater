@@ -175,8 +175,8 @@ const state = {
   coverage: store.get('coverage', 8),
   breakT: null,
   spd: store.get('spd', 'kn'),
-  currents: store.get('currents', false),
-  wind: store.get('wind', false),
+  mapView: store.get('mapView', 'sat'),      // 'sat' | 'wind' | 'current' - full map view, mutually exclusive
+  showArrows: store.get('showArrows', true),
   seamarks: store.get('seamarks', false),
   fads: store.get('fads', true),
   gps: null,
@@ -394,7 +394,7 @@ async function refreshBreaks(announce) {
     return;
   }
   breakLayer = new BreakLayer({ pane: 'breaks', maxZoom: 13, minZoom: 5, opacity: 1 });
-  breakLayer.addTo(map);
+  if (state.mapView === 'sat') breakLayer.addTo(map);
 }
 function paintBreakHint() {
   const el = $('#thVal');
@@ -431,9 +431,106 @@ function setFads(on) {
   on ? fadLayer.addTo(map) : map.removeLayer(fadLayer);
 }
 
-/* --------------------------- current arrows ------------------------- */
-/* Grid-sampled surface current drawn as arrows. This is the broad-scale
-   model current, not the tidal stream - see the note in the drawer. */
+/* ------------------- wind / current field + arrows ------------------- */
+/* Wind and Current are full map "pages", mutually exclusive with the
+   satellite layer (SST/Chl/Anom) - same one-tap pattern, driven by
+   state.mapView. Each renders as a smooth coloured field (a small NxN
+   sample-grid canvas, scaled up with smoothing - the same trick behind
+   Windy/GIBS-style continuous colour from a coarse grid) plus a sparse,
+   neutral set of direction arrows on top. Colour now carries magnitude,
+   so the arrows don't need to - which also sidesteps the old per-arrow
+   colour buckets that broke when the display unit was km/h. */
+const FIELD_N = 8;
+const WIND_STOPS = [
+  { v: 0, rgb: [46, 74, 102] },
+  { v: 5, rgb: [53, 130, 165] },
+  { v: 10, rgb: [69, 179, 168] },
+  { v: 15, rgb: [130, 199, 100] },
+  { v: 20, rgb: [230, 205, 70] },
+  { v: 28, rgb: [255, 150, 60] },
+  { v: 38, rgb: [255, 80, 80] }
+];
+const CURRENT_STOPS = [
+  { v: 0, rgb: [30, 60, 92] },
+  { v: 0.3, rgb: [45, 116, 150] },
+  { v: 0.6, rgb: [68, 168, 176] },
+  { v: 1.0, rgb: [120, 198, 120] },
+  { v: 1.6, rgb: [230, 205, 70] },
+  { v: 2.5, rgb: [255, 120, 70] }
+];
+function lerpColor(stops, v) {
+  if (v <= stops[0].v) return stops[0].rgb;
+  for (let i = 1; i < stops.length; i++) {
+    if (v <= stops[i].v) {
+      const a = stops[i - 1], b = stops[i], f = (v - a.v) / (b.v - a.v);
+      return [0, 1, 2].map(k => Math.round(a.rgb[k] + (b.rgb[k] - a.rgb[k]) * f));
+    }
+  }
+  return stops[stops.length - 1].rgb;
+}
+/* N x N sample points across the current view, row-major north-to-south,
+   west-to-east - matches how the small field canvas gets painted. */
+function fieldGrid(N, b) {
+  const pts = [];
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      pts.push({
+        lat: b.getNorth() - (b.getNorth() - b.getSouth()) * (i + 0.5) / N,
+        lon: b.getWest() + (b.getEast() - b.getWest()) * (j + 0.5) / N
+      });
+    }
+  }
+  return pts;
+}
+function drawField(canvas, m, dpr, grid, N, kind) {
+  const g = canvas.getContext('2d');
+  dpr = dpr || 1;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const size = m.getSize();
+  g.clearRect(0, 0, size.x, size.y);
+  if (!grid) return;
+  const stops = kind === 'wind' ? WIND_STOPS : CURRENT_STOPS;
+  const small = document.createElement('canvas'); small.width = N; small.height = N;
+  const sg = small.getContext('2d');
+  const img = sg.createImageData(N, N);
+  for (let idx = 0; idx < N * N; idx++) {
+    const p = grid[idx], o = idx * 4;
+    if (!p) { img.data[o + 3] = 0; continue; }
+    const [r, gg, b] = lerpColor(stops, p.kn);
+    img.data[o] = r; img.data[o + 1] = gg; img.data[o + 2] = b; img.data[o + 3] = 200;
+  }
+  sg.putImageData(img, 0, 0);
+  g.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in g) g.imageSmoothingQuality = 'high';
+  g.drawImage(small, 0, 0, N, N, 0, 0, size.x, size.y);
+  if (!state.showArrows) return;
+  g.globalAlpha = 0.85;
+  const step = 2;   // sparse - the field carries magnitude, arrows are direction-only
+  for (let i = 0; i < N; i += step) {
+    for (let j = 0; j < N; j += step) {
+      const p = grid[i * N + j];
+      if (!p) continue;
+      const c = m.latLngToContainerPoint([p.lat, p.lon]);
+      // wind_direction_10m is where the wind is FROM; ocean_current_direction is where it's heading
+      const a = ((kind === 'wind' ? p.dir + 180 : p.dir) - 90) * Math.PI / 180;
+      const dx = Math.cos(a), dy = Math.sin(a), len = 15;
+      const x0 = c.x - dx * len / 2, y0 = c.y - dy * len / 2;
+      const x1 = c.x + dx * len / 2, y1 = c.y + dy * len / 2;
+      g.strokeStyle = 'rgba(255,255,255,.85)'; g.fillStyle = 'rgba(255,255,255,.85)';
+      g.lineWidth = 1.6; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      const hl = 4.5, ha = 0.45;
+      g.beginPath();
+      g.moveTo(x1, y1);
+      g.lineTo(x1 - hl * Math.cos(a - ha), y1 - hl * Math.sin(a - ha));
+      g.lineTo(x1 - hl * Math.cos(a + ha), y1 - hl * Math.sin(a + ha));
+      g.closePath(); g.fill();
+    }
+  }
+  g.globalAlpha = 1;
+}
+/* Grid-sampled surface current, rendered as a coloured field. This is the
+   broad-scale model current, not the tidal stream - see the note in the drawer. */
 const CurrentLayer = L.Layer.extend({
   onAdd(map) {
     this._map = map;
@@ -446,7 +543,7 @@ const CurrentLayer = L.Layer.extend({
   onRemove(map) {
     map.off('moveend zoomend resize', this._reset, this);
     L.DomUtil.remove(this._canvas);
-    this._pts = null;
+    this._grid = null;
   },
   _reset() {
     const m = this._map, size = m.getSize();
@@ -459,24 +556,15 @@ const CurrentLayer = L.Layer.extend({
     this._load();
   },
   async _load() {
-    const b = this._map.getBounds();
-    const N = 6;                                  // 6x6 grid, two modest requests
-    const pts = [];
-    for (let i = 0; i < N; i++) {
-      for (let j = 0; j < N; j++) {
-        pts.push({
-          lat: b.getSouth() + (b.getNorth() - b.getSouth()) * (i + 0.5) / N,
-          lon: b.getWest() + (b.getEast() - b.getWest()) * (j + 0.5) / N
-        });
-      }
-    }
+    const N = FIELD_N;
+    const pts = fieldGrid(N, this._map.getBounds());
     const target = tlTargetTime();
     const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + target;
-    if (!target) { this._pts = null; this._draw(); return; }
-    if (key === this._key && this._pts) { this._draw(); return; }
+    if (!target) { this._grid = null; this._draw(); return; }
+    if (key === this._key && this._grid) { this._draw(); return; }
     this._key = key;
     try {
-      const out = [];
+      const grid = new Array(N * N).fill(null);
       for (let k = 0; k < pts.length; k += 25) {
         const chunk = pts.slice(k, k + 25);
         const url = 'https://marine-api.open-meteo.com/v1/marine?latitude=' +
@@ -493,73 +581,25 @@ const CurrentLayer = L.Layer.extend({
           const v = r.hourly.ocean_current_velocity[h];
           const d = r.hourly.ocean_current_direction[h];
           if (v == null || d == null) return;
-          out.push({ lat: chunk[i].lat, lon: chunk[i].lon, kn: v / 1.852, dir: d });
+          grid[k + i] = { lat: chunk[i].lat, lon: chunk[i].lon, kn: v / 1.852, dir: d };
         });
       }
-      this._pts = out;
+      this._grid = grid;
       this._draw();
     } catch {
-      this._pts = null;
-      const g = this._canvas.getContext('2d');
-      g.clearRect(0, 0, this._canvas.width, this._canvas.height);
-      updateCurrentKey(null);
+      this._grid = null;
+      this._draw();
     }
   },
   refresh() { this._load(); },
-  _draw() {
-    const g = this._canvas.getContext('2d'), m = this._map, dpr = this._dpr || 1;
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, this._canvas.width, this._canvas.height);
-    if (!this._pts || !this._pts.length) { updateCurrentKey(null); return; }
-    let max = 0;
-    this._pts.forEach(p => { if (p.kn > max) max = p.kn; });
-    const scale = Math.max(0.4, max);
-    this._pts.forEach(p => {
-      const c = m.latLngToContainerPoint([p.lat, p.lon]);
-      const frac = Math.min(1, p.kn / scale);
-      const len = 9 + 20 * frac;
-      // ocean_current_direction is the way the water is heading
-      const a = (p.dir - 90) * Math.PI / 180;
-      const dx = Math.cos(a), dy = Math.sin(a);
-      const x0 = c.x - dx * len / 2, y0 = c.y - dy * len / 2;
-      const x1 = c.x + dx * len / 2, y1 = c.y + dy * len / 2;
-      const col = p.kn < 0.5 ? 'rgba(120,205,235,.85)'
-        : p.kn < 1.2 ? 'rgba(90,225,190,.9)'
-        : p.kn < 2 ? 'rgba(255,214,74,.92)' : 'rgba(255,122,60,.95)';
-      g.strokeStyle = col; g.fillStyle = col;
-      g.lineWidth = 1.6 + 1.4 * frac; g.lineCap = 'round';
-      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      const hl = 4 + 3 * frac, ha = 0.45;
-      g.beginPath();
-      g.moveTo(x1, y1);
-      g.lineTo(x1 - hl * Math.cos(a - ha), y1 - hl * Math.sin(a - ha));
-      g.lineTo(x1 - hl * Math.cos(a + ha), y1 - hl * Math.sin(a + ha));
-      g.closePath(); g.fill();
-    });
-    updateCurrentKey(max);
-  }
+  _draw() { drawField(this._canvas, this._map, this._dpr, this._grid, FIELD_N, 'current'); }
 });
 let currentLayer = null;
-function updateCurrentKey(max) {
-  const el = document.getElementById('curkey');
-  if (!el) return;
-  el.innerHTML = max == null
-    ? '<span>Surface current</span><span>needs signal</span>'
-    : '<span>Surface current</span><span>up to ' + max.toFixed(1) + ' kn</span>';
-  el.style.display = state.currents ? '' : 'none';
-}
-function setCurrents(on) {
-  state.currents = on; store.set('currents', on);
-  const el = document.getElementById('currentOn'); if (el) el.checked = on;
-  if (currentLayer) { map.removeLayer(currentLayer); currentLayer = null; }
-  if (on) { currentLayer = new CurrentLayer(); currentLayer.addTo(map); }
-  updateCurrentKey(null);
-}
 
-/* ---------------------------- wind arrows ---------------------------- */
-/* Same grid-and-arrow approach as CurrentLayer, but samples forecast wind
-   speed/direction. wind_direction_10m is the direction the wind is coming
-   FROM, so arrows are drawn 180deg from that - the way the wind is going. */
+/* Same grid-and-field approach, sampling forecast wind speed/direction.
+   Always fetched in true knots regardless of the display unit, so the
+   field colour and legend stay correct however Settings has units set -
+   the unit only affects the legend's printed numbers. */
 const WindLayer = L.Layer.extend({
   onAdd(map) {
     this._map = map;
@@ -572,7 +612,7 @@ const WindLayer = L.Layer.extend({
   onRemove(map) {
     map.off('moveend zoomend resize', this._reset, this);
     L.DomUtil.remove(this._canvas);
-    this._pts = null;
+    this._grid = null;
   },
   _reset() {
     const m = this._map, size = m.getSize();
@@ -585,24 +625,15 @@ const WindLayer = L.Layer.extend({
     this._load();
   },
   async _load() {
-    const b = this._map.getBounds();
-    const N = 6;
-    const pts = [];
-    for (let i = 0; i < N; i++) {
-      for (let j = 0; j < N; j++) {
-        pts.push({
-          lat: b.getSouth() + (b.getNorth() - b.getSouth()) * (i + 0.5) / N,
-          lon: b.getWest() + (b.getEast() - b.getWest()) * (j + 0.5) / N
-        });
-      }
-    }
+    const N = FIELD_N;
+    const pts = fieldGrid(N, this._map.getBounds());
     const target = tlTargetTime();
-    const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + target + '@' + state.spd;
-    if (!target) { this._pts = null; this._draw(); return; }
-    if (key === this._key && this._pts) { this._draw(); return; }
+    const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + target;
+    if (!target) { this._grid = null; this._draw(); return; }
+    if (key === this._key && this._grid) { this._draw(); return; }
     this._key = key;
     try {
-      const out = [];
+      const grid = new Array(N * N).fill(null);
       for (let k = 0; k < pts.length; k += 25) {
         const chunk = pts.slice(k, k + 25);
         const url = 'https://api.open-meteo.com/v1/forecast?latitude=' +
@@ -610,7 +641,7 @@ const WindLayer = L.Layer.extend({
           chunk.map(p => p.lon.toFixed(3)).join(',') +
           '&hourly=wind_speed_10m,wind_direction_10m' +
           '&timezone=Australia%2FPerth&past_days=' + Math.max(0, -TL_DAY_MIN) + '&forecast_days=' + (TL_DAY_MAX + 1) +
-          '&wind_speed_unit=' + (state.spd === 'kn' ? 'kn' : 'kmh');
+          '&wind_speed_unit=kn';
         const raw = await fetchJson(url, 60, false);
         const arr = Array.isArray(raw) ? raw : [raw];
         arr.forEach((r, i) => {
@@ -620,83 +651,75 @@ const WindLayer = L.Layer.extend({
           const v = r.hourly.wind_speed_10m[h];
           const d = r.hourly.wind_direction_10m[h];
           if (v == null || d == null) return;
-          out.push({ lat: chunk[i].lat, lon: chunk[i].lon, kn: state.spd === 'kn' ? v : v / 1.852, dir: d });
+          grid[k + i] = { lat: chunk[i].lat, lon: chunk[i].lon, kn: v, dir: d };
         });
       }
-      this._pts = out;
+      this._grid = grid;
       this._draw();
     } catch {
-      this._pts = null;
-      const g = this._canvas.getContext('2d');
-      g.clearRect(0, 0, this._canvas.width, this._canvas.height);
-      updateWindKey(null);
+      this._grid = null;
+      this._draw();
     }
   },
   refresh() { this._load(); },
-  _draw() {
-    const g = this._canvas.getContext('2d'), m = this._map, dpr = this._dpr || 1;
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, this._canvas.width, this._canvas.height);
-    if (!this._pts || !this._pts.length) { updateWindKey(null); return; }
-    let max = 0;
-    this._pts.forEach(p => { if (p.kn > max) max = p.kn; });
-    const scale = Math.max(6, max);
-    this._pts.forEach(p => {
-      const c = m.latLngToContainerPoint([p.lat, p.lon]);
-      const frac = Math.min(1, p.kn / scale);
-      const len = 10 + 20 * frac;
-      // wind_direction_10m is where the wind is FROM, so flip 180deg for where it's going
-      const a = (p.dir + 180 - 90) * Math.PI / 180;
-      const dx = Math.cos(a), dy = Math.sin(a);
-      const x0 = c.x - dx * len / 2, y0 = c.y - dy * len / 2;
-      const x1 = c.x + dx * len / 2, y1 = c.y + dy * len / 2;
-      // p.kn is already in the display unit (kn or km/h) - thresholds below match both
-      const col = p.kn < (state.spd === 'kn' ? 8 : 15) ? 'rgba(200,210,225,.8)'
-        : p.kn < (state.spd === 'kn' ? 15 : 28) ? 'rgba(120,205,235,.88)'
-        : p.kn < (state.spd === 'kn' ? 22 : 41) ? 'rgba(255,214,74,.92)' : 'rgba(255,107,90,.95)';
-      g.strokeStyle = col; g.fillStyle = col;
-      g.lineWidth = 1.6 + 1.4 * frac; g.lineCap = 'round';
-      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      const hl = 4 + 3 * frac, ha = 0.45;
-      g.beginPath();
-      g.moveTo(x1, y1);
-      g.lineTo(x1 - hl * Math.cos(a - ha), y1 - hl * Math.sin(a - ha));
-      g.lineTo(x1 - hl * Math.cos(a + ha), y1 - hl * Math.sin(a + ha));
-      g.closePath(); g.fill();
-    });
-    updateWindKey(max);
-  }
+  _draw() { drawField(this._canvas, this._map, this._dpr, this._grid, FIELD_N, 'wind'); }
 });
 let windLayer = null;
-function updateWindKey(max) {
-  const el = document.getElementById('windkey');
-  if (!el) return;
-  const u = state.spd === 'kn' ? 'kn' : 'km/h';
-  el.innerHTML = max == null
-    ? '<span>Wind</span><span>needs signal</span>'
-    : '<span>Wind</span><span>up to ' + Math.round(max) + ' ' + u + '</span>';
-  el.style.display = state.wind ? '' : 'none';
+
+/* Gradient legend for whichever field is showing - same look as the
+   SST/Chl/Anom legend (.lg-title/.lg-bar/.lg-ends), swapped in when the
+   map view isn't 'sat'. Wind's stops are true knots; convert to km/h for
+   the printed numbers only when that's the chosen display unit. */
+function paintFieldLegend(kind) {
+  const stops = kind === 'wind' ? WIND_STOPS : CURRENT_STOPS;
+  const lo = stops[0].v, hi = stops[stops.length - 1].v;
+  const grad = stops.map(s => 'rgb(' + s.rgb.join(',') + ') ' + (((s.v - lo) / (hi - lo)) * 100).toFixed(1) + '%').join(',');
+  const toDisplay = v => (kind === 'wind' && state.spd !== 'kn') ? v * 1.852 : v;
+  const unit = kind === 'wind' ? (state.spd === 'kn' ? 'kn' : 'km/h') : 'kn';
+  const title = kind === 'wind' ? 'Wind speed' : 'Surface current';
+  const el = $('#legend');
+  el.classList.remove('hidden');
+  el.innerHTML =
+    '<div class="lg-title">' + title + '</div>' +
+    '<div class="lg-bar" style="background:linear-gradient(90deg,' + grad + ')"></div>' +
+    '<div class="lg-ends"><span>' + Math.round(toDisplay(lo)) + '</span><span>' + unit + '</span><span>' + Math.round(toDisplay(hi)) + '+</span></div>';
 }
-function setWind(on) {
-  state.wind = on; store.set('wind', on);
-  const el = document.getElementById('windOn'); if (el) el.checked = on;
-  if (windLayer) { map.removeLayer(windLayer); windLayer = null; }
-  if (on) { windLayer = new WindLayer(); windLayer.addTo(map); }
-  updateWindKey(null);
-}
+
 function paintWcSeg() {
-  $$('#wcSeg button').forEach(b => b.classList.toggle('on', b.dataset.wc === state.tlPage));
+  $$('#wcSeg button').forEach(b => b.classList.toggle('on', b.dataset.wc === state.mapView));
 }
-/* Tapping Wind/Current up top works like the map-type buttons: it picks
-   the page AND drives that arrow layer on the map (mutually exclusive,
-   same one-tap pattern as SST/Chl/Anom). The Settings checkboxes still
-   work for finer control - e.g. turning arrows off without losing the
-   graph you're looking at. */
+/* The single switch between the satellite layer and a full-page wind/current
+   field - mutually exclusive, one tap, same pattern as SST/Chl/Anom. Leaving
+   'sat' hides the imagery + break-finder panes (without discarding them);
+   coming back re-shows them rather than refetching. */
+function setMapView(view) {
+  state.mapView = view; store.set('mapView', view);
+  paintWcSeg();
+  markSel();
+  if (view === 'sat') {
+    if (windLayer) { map.removeLayer(windLayer); windLayer = null; }
+    if (currentLayer) { map.removeLayer(currentLayer); currentLayer = null; }
+    if (dataLayer && !map.hasLayer(dataLayer)) dataLayer.addTo(map);
+    if (breakLayer && !map.hasLayer(breakLayer)) breakLayer.addTo(map);
+    paintLegend();
+  } else {
+    if (dataLayer && map.hasLayer(dataLayer)) map.removeLayer(dataLayer);
+    if (breakLayer && map.hasLayer(breakLayer)) map.removeLayer(breakLayer);
+    if (view === 'wind') {
+      if (currentLayer) { map.removeLayer(currentLayer); currentLayer = null; }
+      if (!windLayer) { windLayer = new WindLayer(); windLayer.addTo(map); }
+    } else {
+      if (windLayer) { map.removeLayer(windLayer); windLayer = null; }
+      if (!currentLayer) { currentLayer = new CurrentLayer(); currentLayer.addTo(map); }
+    }
+    paintFieldLegend(view);
+  }
+}
+/* Tapping Wind/Current up top picks which forecast the timeline graph
+   shows AND switches the map to that full field view. */
 function setTlPage(page) {
   state.tlPage = page; store.set('tlPage', page);
-  paintWcSeg();
-  if (page === 'wind') { if (!state.wind) setWind(true); if (state.currents) setCurrents(false); }
-  else { if (!state.currents) setCurrents(true); if (state.wind) setWind(false); }
+  setMapView(page);
   renderTimelineGraph();
   updateTlValue();
 }
@@ -812,13 +835,7 @@ async function paintLegend() {
   $('#legend').innerHTML =
     '<div class="lg-title">' + L_.full + '</div>' +
     '<div class="lg-bar" style="background:linear-gradient(90deg,' + grad + ')"></div>' +
-    '<div class="lg-ends"><span>' + L_.fmt(lo) + '</span><span>' + L_.unit + '</span><span>' + L_.fmt(hi) + '</span></div>' +
-    '<div class="curkey" id="curkey" style="display:none"></div>' +
-    '<div class="curkey" id="windkey" style="display:none"></div>';
-  updateCurrentKey(currentLayer && currentLayer._pts && currentLayer._pts.length
-    ? Math.max(...currentLayer._pts.map(p => p.kn)) : null);
-  updateWindKey(windLayer && windLayer._pts && windLayer._pts.length
-    ? Math.max(...windLayer._pts.map(p => p.kn)) : null);
+    '<div class="lg-ends"><span>' + L_.fmt(lo) + '</span><span>' + L_.unit + '</span><span>' + L_.fmt(hi) + '</span></div>';
 }
 
 /* ------------------------------- GPS -------------------------------- */
@@ -1409,14 +1426,17 @@ $$('.drawer').forEach(d => d.addEventListener('click', e => { if (e.target === d
 
 // map-type shortcuts
 function markSel() {
-  $$('#layerSeg button').forEach(b => b.classList.toggle('on', b.dataset.layer === state.layer));
+  $$('#layerSeg button').forEach(b => b.classList.toggle('on', state.mapView === 'sat' && b.dataset.layer === state.layer));
 }
 markSel();
 $('#layerSeg').addEventListener('click', async e => {
   const b = e.target.closest('button[data-layer]');
-  if (!b || b.dataset.layer === state.layer) return;
-  state.layer = b.dataset.layer; store.set('layer', state.layer);
+  if (!b) return;
+  const same = b.dataset.layer === state.layer;
+  if (!same) { state.layer = b.dataset.layer; store.set('layer', state.layer); }
   markSel();
+  setMapView('sat');
+  if (same) return;
   const l = await latestDate(state.layer);
   state.latest[state.layer] = l; store.set('latest.' + state.layer, l);
   state.dates = buildDates(l);
@@ -1482,14 +1502,15 @@ function setBreaks(on) {
 $('#breakOn').addEventListener('change', e => setBreaks(e.target.checked));
 $('#btnBreak').addEventListener('click', () => setBreaks(!state.breaks));
 
-$('#currentOn').checked = state.currents;
-$('#currentOn').addEventListener('change', e => setCurrents(e.target.checked));
-$('#windOn').checked = state.wind;
-$('#windOn').addEventListener('change', e => setWind(e.target.checked));
+$('#arrowsOn').checked = state.showArrows;
+$('#arrowsOn').addEventListener('change', e => {
+  state.showArrows = e.target.checked; store.set('showArrows', state.showArrows);
+  if (windLayer) windLayer._draw();
+  if (currentLayer) currentLayer._draw();
+});
 
 /* wind / current page selector, up in the top bar - picks which forecast
-   the timeline graph and value line show. Arrow visibility on the map
-   stays independently controlled by the two checkboxes above. */
+   the timeline graph shows AND switches the map to that full field view. */
 $$('#wcSeg button').forEach(b => b.addEventListener('click', () => setTlPage(b.dataset.wc)));
 
 /* timeline scrubber - cheap redraw on every drag tick, layer refetch debounced */
@@ -1624,7 +1645,7 @@ $$('input[name=spd]').forEach(r => {
   r.addEventListener('change', () => {
     state.spd = r.value; store.set('spd', state.spd);
     if (tapPt) loadConditions(tapPt.lat, tapPt.lng); else loadConditions(map.getCenter().lat, map.getCenter().lng);
-    if (windLayer) windLayer.refresh();
+    if (state.mapView === 'wind') paintFieldLegend('wind');
   });
 });
 $('#btnSetHome').addEventListener('click', () => {
@@ -1710,9 +1731,7 @@ window.addEventListener('offline', () => toast('Offline. Using saved maps.', 320
   buildDataLayer();
   paintLegend();
   refreshBreaks(false);
-  if (state.currents) setCurrents(true);
-  if (state.wind) setWind(true);
-  paintWcSeg();
+  setMapView(state.mapView);
   const c = map.getCenter();
   loadConditions(c.lat, c.lng);
   loadTide(c.lat, c.lng);

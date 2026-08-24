@@ -1,4 +1,4 @@
-const APP = 'bw-app-v2';
+const APP = 'bw-app-v3';
 const TILES = 'bw-tiles-v1';
 const SHELL = [
   './', './index.html', './app.js', './styles.css', './manifest.webmanifest',

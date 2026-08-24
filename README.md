@@ -83,10 +83,10 @@ number that lights up a good edge in one layer paints nothing at all in another.
 ### Map type and date
 
 The three buttons top-left switch between SST, chlorophyll and anomaly in one tap.
-Next to them, **Wind** / **Current** picks which forecast the timeline below is
-showing (see the next section). Under both, the arrows either side of the date step
-back and forward a day at a time without opening settings. Forward greys out when you
-are on the newest imagery NASA has published, because there is nothing after it.
+Next to them, **Wind** / **Current** switches the whole map to that forecast instead
+(see the next section). Under both, the arrows either side of the date step back and
+forward a day at a time without opening settings. Forward greys out when you are on
+the newest imagery NASA has published, because there is nothing after it.
 
 The floating buttons on the right, top to bottom, are: save for offline, settings,
 break finder, find me. Everything else — opacity, break sensitivity, cartography,
@@ -103,32 +103,38 @@ Position*. Each decimal pair was checked against the degrees-decimal-minutes on 
 same record. **They are still not live.** FADs are moored, not fixed: they break away,
 get retrieved and get moved. The app links to the official listing from Settings.
 
-### Wind, gusts and current — the timeline
+### Wind and current — full map pages
 
-A Windy-style scrubber sits above the map buttons, one graph at a time: tap **Wind**
-or **Current** up top to switch which one it's showing. On the Wind page, speed and
-gusts are drawn as two filled lines overlaid on the same axis — speed solid, gusts the
-paler line behind it — over day/night shading, with the values for wherever you've
-dragged to printed underneath. The Current page is the same idea with one line, speed
-and heading printed underneath.
+Tap **Wind** or **Current** up top and the map itself switches to that forecast —
+a smooth coloured field across the whole screen, with its own scale bottom-left, the
+same way SST, chlorophyll and anomaly work. It replaces the satellite layer rather
+than sitting on top of it, so there's one thing on screen at a time instead of arrows
+crowded over imagery. A sparse set of white arrows sits over the field for direction;
+colour carries the speed. Tap SST, Chl or Anom to go back to the satellite view —
+whichever forecast you last had showing stays remembered for next time you tap
+Wind or Current again.
 
-Drag the dot and the Conditions cards, the value line, and — if that layer is turned on
-in Settings — the wind or current arrows on the map all update to that hour, arrows
-redrawing after a short pause so it isn't refetching on every pixel of drag. The arrows
-you see follow whichever hour the timeline is sitting on, on whichever page is showing.
+Underneath, a Windy-style scrubber shows the same forecast as a graph, one at a time:
+speed and gusts as two overlaid filled lines on the Wind page, a single line for
+Current, over day/night shading, with the values for wherever you've dragged to
+printed underneath.
 
-The arrows either side of **Today** step the whole timeline to another day, past or
-forecast — Open-Meteo keeps a few days of recent history and forecasts about ten days
-out, and the day arrows stop at either end of that. **Now** snaps straight back to
-today at the current hour.
+Drag the dot and the Conditions cards, the value line, and the field on the map all
+update to that hour — the field redraws after a short pause so it isn't refetching on
+every pixel of drag. The arrows either side of **Today** step the whole timeline to
+another day, past or forecast — Open-Meteo keeps a few days of recent history and
+forecasts about ten days out, and the day arrows stop at either end of that. **Now**
+snaps straight back to today at the current hour.
 
-Both arrow layers are grid-sampled over the visible area, coloured and sized by speed.
-Wind is a standard forecast model and does change meaningfully hour to hour — that's
-the point of the slider. Current does too, but the current layer is a **broad-scale
-ocean current** from a global model, not the tidal stream. Inshore of Broome on a big
-tide, the tide is what actually moves the water, by a wide margin, and this layer won't
-show that. Read the current arrows as background drift and read the **Tide** tab —
-which does capture Broome's real swing from harmonic constituents — for the run.
+Both fields are grid-sampled over the visible area. Wind is a standard forecast model
+and does change meaningfully hour to hour — that's the point of the slider. Current
+does too, but the current layer is a **broad-scale ocean current** from a global
+model, not the tidal stream. Inshore of Broome on a big tide, the tide is what
+actually moves the water, by a wide margin, and this layer won't show that. Read it as
+background drift and read the **Tide** tab — which does capture Broome's real swing
+from harmonic constituents — for the run.
+
+Direction arrows can be turned off in Settings if you just want the colour.
 
 ### Marine cartography
 

@@ -194,10 +194,9 @@
     <input type="range" id="thresh" min="1" max="25" value="8">
     <div class="hint" id="breakHint">Measures how fast the layer changes across distance and paints the fastest&#8209;changing water. The slider sets how much of what you can see gets highlighted, so it finds the strongest edges on screen whatever the layer or season.</div>
 
-    <h3>Wind &amp; current arrows</h3>
-    <label class="sw"><input type="checkbox" id="windOn"> <span>Wind arrows</span></label>
-    <label class="sw"><input type="checkbox" id="currentOn"> <span>Current arrows</span></label>
-    <div class="hint">Same as the Wind / Current buttons up top. Both are forecast model output, and both follow the timeline scrubber above the map buttons — drag it, or step through days, to see wind and current change over time. Current is a broad&#8209;scale ocean model. It does <b>not</b> show the tidal stream, which is what actually moves the water inshore of Broome on a big tide — read it as background drift, not the run. For that, use the Tide tab, which does capture Broome's real tidal swing and can also be stepped forward or back to any day.</div>
+    <h3>Wind &amp; current</h3>
+    <label class="sw"><input type="checkbox" id="arrowsOn" checked> <span>Direction arrows</span></label>
+    <div class="hint">Tap Wind or Current up top for the full map — coloured by speed, with its own scale, in place of the satellite layer. Both follow the timeline scrubber above the map buttons — drag it, or step through days, to see wind and current change over time. Current is a broad&#8209;scale ocean model. It does <b>not</b> show the tidal stream, which is what actually moves the water inshore of Broome on a big tide — read it as background drift, not the run. For that, use the Tide tab, which does capture Broome's real tidal swing and can also be stepped forward or back to any day.</div>
 
     <h3>Marine cartography</h3>
     <label class="sw"><input type="checkbox" id="bathyOn" checked> <span>Bathymetry &amp; contours</span></label>
