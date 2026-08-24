@@ -65,32 +65,46 @@ it.
 
 ### The break finder
 
-This is the part worth understanding. It does not just colour the water — it decodes
-each satellite tile back to real degrees, then measures how fast temperature changes
-across distance. Anything steeper than the sensitivity you set gets painted orange,
-brighter where the edge is harder.
+It does not just colour the water. It decodes each satellite tile back to real
+degrees using NASA's published colour scale, then measures how fast temperature
+changes across distance and paints the fastest-changing water.
 
-Default is 0.10 °C/km. Wind it up to about 0.25 and only the hard edges survive,
-which is usually what you want when you are picking one spot to run to. On the
-chlorophyll layer it measures the same thing on a log scale, so a colour change from
-0.1 to 0.3 mg/m³ reads as strongly as one from 1 to 3.
+The sensitivity slider is **how much of the water on screen to highlight**, not an
+absolute number. Set it to 8% and it finds the strongest-changing 8% of what you can
+see, whatever the layer, season or region. The absolute figure it lands on is shown
+next to the slider so you can still judge whether an edge is worth the fuel — offshore
+Broome that is usually somewhere around 0.02–0.05 °C/km, and anything above about
+0.1 °C/km is a hard edge.
+
+It works this way because an absolute threshold does not survive contact with real
+data. MUR SST is a smoothed analysis and an anomaly field is smoother again, so a
+number that lights up a good edge in one layer paints nothing at all in another.
+
+### Map type and date
+
+The three buttons top-left switch between SST, chlorophyll and anomaly in one tap.
+Below them, the arrows either side of the date step back and forward a day at a time
+without opening settings. Forward greys out when you are on the newest imagery NASA
+has published, because there is nothing after it.
+
+Everything else — opacity, break sensitivity, cartography, current, FADs, units —
+lives in **Settings** behind the menu button.
 
 ### Broome FADs
 
 Four FADs are marked as standard. Tap one and you get the same readout as tapping
-open water — the temperature, the chlorophyll and the gradient at the FAD, plus range
-and bearing from the boat.
+open water: temperature, chlorophyll and gradient at the FAD, plus range and bearing
+from the boat. Save it and the mark keeps the FAD's name.
 
-The coordinates come from Recfishwest's published sheets. Two separate Recfishwest
-documents list the same four positions, which is why these are the ones in the app.
-**They are not live.** FADs are moored, not fixed: they break away, get retrieved and
-get redeployed, and DPIRD's own interactive map is the only current authority. The
-app links to it from the layers panel. Check before you plan a trip around one.
+Positions are from the current official listing, where all four were showing *In
+Position*. Each decimal pair was checked against the degrees-decimal-minutes on the
+same record. **They are still not live.** FADs are moored, not fixed: they break away,
+get retrieved and get moved. The app links to the official listing from Settings.
 
 ### Surface current
 
 Arrows over the visible area, sampled on a grid, coloured and sized by speed. This is
-the broad-scale ocean current from a global model.
+broad-scale ocean current from a global model.
 
 It is **not** the tidal stream. Inshore of Broome on a big tide the tide is what moves
 the water, by a wide margin, and this layer will not show it. Read the arrows as
@@ -98,23 +112,22 @@ background drift and read the tide tab for the run.
 
 ### Marine cartography
 
-Bathymetry and depth contours come from the Esri Ocean basemap, with GEBCO available
-as a deeper relief layer. Seamarks — buoys, beacons, lights — come from OpenSeaMap,
-which is crowd-sourced and optional.
+Bathymetry and depth contours from the Esri Ocean basemap, GEBCO available as a deeper
+relief layer, and OpenSeaMap seamarks — buoys, beacons, lights — as an optional
+overlay.
 
-None of this is an official chart. There are no soundings you should trust, no hazard
-data and no survey authority behind it. It is for orientation. The plotter is for
-navigation.
+None of this is an official chart. No soundings you should trust, no hazard data, no
+survey authority behind it. It is for orientation. The plotter is for navigation.
 
 ### Imagery freshness
 
-The layers panel shows the newest day NASA has actually published, how far behind real
-time that is, and roughly when the next one should appear. **Check for new imagery**
-re-queries NASA on demand rather than waiting for the next app launch.
+Settings shows the newest day NASA has actually published, how far behind real time
+that is, and roughly when the next should appear. **Check for new imagery** re-queries
+NASA on demand.
 
 SST normally runs about a day behind. Chlorophyll runs one to two days behind and goes
-blank under cloud. If the app opens on an older date than you expect, that is because
-NASA has not posted anything newer yet, not because the app is stale.
+blank under cloud. If the app opens on an older date than you expect, that is NASA,
+not the app.
 
 ### Tide
 

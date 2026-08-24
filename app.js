@@ -17,7 +17,7 @@ const LAYERS = {
     name: 'SST', full: 'Sea surface temperature', unit: '°C',
     fmt: v => v.toFixed(1) + '°',
     // break finder works in raw degrees
-    grad: v => v, gUnit: '°C/km', gRange: [0.02, 0.60], gDefault: 0.12
+    grad: v => v, gUnit: '°C/km'
   },
   chl: {
     id: 'VIIRS_NOAA21_Chlorophyll_a',
@@ -26,7 +26,7 @@ const LAYERS = {
     name: 'Chl-a', full: 'Chlorophyll-a', unit: 'mg/m³',
     fmt: v => v < 1 ? v.toFixed(3) : v.toFixed(2),
     // chlorophyll spans decades - measure the break on a log scale
-    grad: v => Math.log10(Math.max(v, 1e-3)), gUnit: 'dex/km', gRange: [0.02, 0.50], gDefault: 0.10
+    grad: v => Math.log10(Math.max(v, 1e-3)), gUnit: 'dex/km'
   },
   sstA: {
     id: 'GHRSST_L4_MUR_Sea_Surface_Temperature_Anomalies',
@@ -34,28 +34,28 @@ const LAYERS = {
     cmap: 'GHRSST_Sea_Surface_Temperature_Anomalies',
     name: 'Anomaly', full: 'SST anomaly vs average', unit: '°C',
     fmt: v => (v > 0 ? '+' : '') + v.toFixed(1) + '°',
-    grad: v => v, gUnit: '°C/km', gRange: [0.02, 0.60], gDefault: 0.12
+    grad: v => v, gUnit: '°C/km'
   }
 };
 
 const HOME = { lat: -18.05, lon: 122.0, zoom: 8 };
 
 // Broome fish aggregating devices.
-// Source: Recfishwest published coordinate sheets. Two separate Recfishwest
-// documents list the same four positions (they number them differently), which
-// is why these are here rather than anything hand-entered. They are NOT live:
-// FADs break their moorings, get retrieved and get redeployed, and DPIRD's own
-// interactive map is the only current authority. Treat these as a starting point
-// and check before you commit to a run.
+// Positions supplied by the user from the current official listing, where all
+// four were showing "In Position". Each decimal pair was checked against the
+// degrees-decimal-minutes on the same record and they agree exactly.
+// These replaced an older published set that was out by 4 to 30 km.
+// FADs are moored, not fixed: they break away, get retrieved and get moved, so
+// this is still a starting point rather than gospel.
 const FADS = {
-  source: 'Recfishwest published coordinates',
-  vintage: '2019 coordinate sheets',
+  source: 'current official listing, all showing In Position',
+  vintage: 'checked 24 Aug 2026',
   check: 'https://www.dpird.wa.gov.au/individuals/recreational-fishing/recreational-fishing-initiatives/fish-aggregating-devices/',
   list: [
-    { name: 'Broome FAD 1', lat: -17.885650, lon: 122.148933 },
-    { name: 'Broome FAD 2', lat: -17.778633, lon: 122.134950 },
-    { name: 'Broome FAD 3', lat: -17.884567, lon: 122.031400 },
-    { name: 'Broome FAD 4', lat: -17.872683, lon: 121.847133 }
+    { name: 'Broome 37', lat: -17.90615, lon: 121.759917 },
+    { name: 'Broome 38', lat: -17.94880, lon: 121.573667 },
+    { name: 'Broome 39', lat: -17.82880, lon: 121.859300 },
+    { name: 'Broome 40', lat: -17.90655, lon: 121.859333 }
   ]
 };
 
@@ -172,7 +172,8 @@ const state = {
   latest: {},
   opacity: store.get('opacity', 80),
   breaks: store.get('breaks', false),
-  thresh: store.get('thresh', 30),
+  coverage: store.get('coverage', 8),
+  breakT: null,
   spd: store.get('spd', 'kn'),
   currents: store.get('currents', false),
   seamarks: store.get('seamarks', false),
@@ -269,8 +270,8 @@ const BreakLayer = L.GridLayer.extend({
       const sub = Math.pow(2, shift);                   // how many child tiles per native tile
       const ox = (coords.x - (px << shift)) * 256 / sub;
       const oy = (coords.y - (py << shift)) * 256 / sub;
-      const lo = LAYERS[key].gRange[0], hi = LAYERS[key].gRange[1];
-      const t = lo + (hi - lo) * Math.pow(state.thresh / 100, 1.6);
+      const t = state.breakT;
+      if (!(t > 0)) { done(null, c); return; }
       for (let yy = 0; yy < 256; yy++) {
         const sy = Math.min(255, Math.floor(oy + yy / sub));
         for (let xx = 0; xx < 256; xx++) {
@@ -292,11 +293,84 @@ const BreakLayer = L.GridLayer.extend({
   }
 });
 let breakLayer = null;
-function refreshBreaks() {
+
+/* The break threshold used to be a fixed number of degrees per kilometre, which
+   was a guess - and a bad one. Real MUR SST gradients offshore are around
+   0.01-0.05 degC/km and an anomaly field is smoother still, so a 0.10 default
+   painted nothing at all and the whole feature looked broken.
+   Now the threshold comes from the data on screen: pool the gradients of the
+   tiles in view and take a percentile, so the slider means "highlight the
+   strongest N% of the water I can see". That holds up across layers, seasons
+   and regions without any magic constants. */
+async function computeBreakThreshold() {
+  const key = state.layer, z = LAYERS[key].maxNative;
+  const b = map.getBounds(), n = Math.pow(2, z);
+  const toX = lon => Math.floor((lon + 180) / 360 * n);
+  const toY = lat => {
+    const r = Math.max(-85.05, Math.min(85.05, lat)) * Math.PI / 180;
+    return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * n);
+  };
+  const x0 = toX(b.getWest()), x1 = toX(b.getEast());
+  const y0 = toY(b.getNorth()), y1 = toY(b.getSouth());
+  const want = [];
+  for (let x = x0; x <= x1 && want.length < 16; x++)
+    for (let y = y0; y <= y1 && want.length < 16; y++)
+      want.push([((x % n) + n) % n, Math.max(0, Math.min(n - 1, y))]);
+  const tiles = await Promise.all(want.map(([x, y]) => getDecoded(key, state.date, z, x, y)));
+  const samples = [];
+  for (const t of tiles) {
+    if (!t) continue;
+    for (let i = 0; i < 65536; i += 5) {
+      const v = t.grad[i];
+      if (!isNaN(v)) samples.push(v);          // flat water counts too - the
+    }                                          // slider means "% of what I can see"
+  }
+  if (samples.length < 200) return null;
+  samples.sort((a, b2) => a - b2);
+  const pick = arr => arr[Math.max(0, Math.min(arr.length - 1,
+    Math.floor(arr.length * (1 - state.coverage / 100))))];
+  let t = pick(samples);
+  if (!(t > 0)) {
+    // Mostly featureless water, so the percentile lands on zero. Fall back to the
+    // same percentile of only the pixels that are changing at all, so a single
+    // sharp edge in an otherwise flat field still gets found.
+    const pos = samples.filter(v => v > 0);
+    if (pos.length < 50) return null;
+    t = pick(pos);
+  }
+  return t > 0 ? t : null;
+}
+
+let breakSeq = 0;
+async function refreshBreaks(announce) {
   if (breakLayer) { map.removeLayer(breakLayer); breakLayer = null; }
-  if (!state.breaks) return;
+  if (!state.breaks) { paintBreakHint(); return; }
+  const seq = ++breakSeq;
+  $('#btnBreak').classList.add('busy');
+  const t = await computeBreakThreshold();
+  if (seq !== breakSeq) return;
+  $('#btnBreak').classList.remove('busy');
+  state.breakT = t;
+  paintBreakHint();
+  if (!t) {
+    if (announce) toast('No usable data here on ' + dayLabel(state.date) + ' — cloud, or off the edge of the pass. Try winding the date back.', 4200);
+    return;
+  }
   breakLayer = new BreakLayer({ pane: 'breaks', maxZoom: 13, minZoom: 5, opacity: 1 });
   breakLayer.addTo(map);
+}
+function paintBreakHint() {
+  const el = $('#thVal');
+  if (!el) return;
+  el.textContent = state.coverage + '%' +
+    (state.breaks && state.breakT
+      ? '  ·  ≥' + state.breakT.toFixed(3) + ' ' + LAYERS[state.layer].gUnit : '');
+}
+let breakMoveT;
+function breaksOnMove() {
+  if (!state.breaks) return;
+  clearTimeout(breakMoveT);
+  breakMoveT = setTimeout(() => refreshBreaks(false), 700);
 }
 
 /* ------------------------------- FADs ------------------------------- */
@@ -534,6 +608,7 @@ async function initDates() {
 }
 function paintDate() {
   $('#dateLabel').textContent = dayLabel(state.date);
+  if (typeof syncDayNav === 'function') syncDayNav();
   $('#dateSub').textContent = state.date + '  ·  ' + LAYERS[state.layer].full;
 }
 
@@ -608,8 +683,8 @@ async function showReadout(latlng, place) {
   if (place) {
     const n = document.createElement('div');
     n.className = 'ro-note'; n.id = 'roNote';
-    n.textContent = FADS.source + ', ' + FADS.vintage +
-      '. FADs get moved, retrieved and break their moorings \u2014 confirm on DPIRD\u2019s map before you plan around one.';
+    n.textContent = 'Position from the ' + FADS.source + ', ' + FADS.vintage +
+      '. FADs get moved, retrieved and break their moorings \u2014 confirm before you plan around one.';
     $('#readout').appendChild(n);
   }
   if (!tapMarker) tapMarker = L.marker(latlng, { icon: tapIcon, zIndexOffset: 800 }).addTo(map);
@@ -917,19 +992,15 @@ $$('[data-close]').forEach(b => b.addEventListener('click', () => {
 }));
 $$('.drawer').forEach(d => d.addEventListener('click', e => { if (e.target === d) d.classList.add('hidden'); }));
 
-// layer options
-$('#layerOpts').innerHTML = Object.entries(LAYERS).map(([k, v]) =>
-  '<label class="sw" data-k="' + k + '"><input type="radio" name="lyr" value="' + k + '"' + (k === state.layer ? ' checked' : '') + '>' +
-  '<span>' + v.full + '<span class="meta">' + (k === 'sst' ? 'Daily blended analysis, best all-round' :
-    k === 'chl' ? 'Green water, bait and colour changes' : 'How far off the seasonal average today sits') + '</span></span></label>').join('');
+// map-type shortcuts
 function markSel() {
-  $$('#layerOpts .sw').forEach(l => l.classList.toggle('sel', l.dataset.k === state.layer));
-  $('#layerName').textContent = LAYERS[state.layer].name;
+  $$('#layerSeg button').forEach(b => b.classList.toggle('on', b.dataset.layer === state.layer));
 }
 markSel();
-$('#layerOpts').addEventListener('change', async e => {
-  if (e.target.name !== 'lyr') return;
-  state.layer = e.target.value; store.set('layer', state.layer);
+$('#layerSeg').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-layer]');
+  if (!b || b.dataset.layer === state.layer) return;
+  state.layer = b.dataset.layer; store.set('layer', state.layer);
   markSel();
   const l = await latestDate(state.layer);
   state.latest[state.layer] = l; store.set('latest.' + state.layer, l);
@@ -937,13 +1008,36 @@ $('#layerOpts').addEventListener('change', async e => {
   const idx = Math.min(state.dates.length - 1, +$('#dateSlider').value);
   $('#dateSlider').max = state.dates.length - 1;
   state.date = state.dates[idx];
-  paintDate(); buildDataLayer(); refreshBreaks(); paintLegend();
+  paintDate(); buildDataLayer(); refreshBreaks(true); paintLegend();
   paintFreshness();
-  updateThreshLabel();
+  paintBreakHint();
+  const seen = store.get('seenLatest.' + state.layer, null);
+  if (seen && seen !== l) toast('New ' + LAYERS[state.layer].name + ' imagery: ' + dayLabel(l), 3200);
+  store.set('seenLatest.' + state.layer, l);
 });
 
-$('#btnLayers').addEventListener('click', () => openDrawer('drawer'));
-$('#btnDate').addEventListener('click', () => openDrawer('drawer'));
+$('#btnDate').addEventListener('click', () => openDrawer('menu'));
+
+/* Day stepper on the map, so you can walk back through the passes without
+   opening settings. Newest available is the ceiling - there is nothing after it. */
+function stepDay(delta) {
+  const i = state.dates.indexOf(state.date);
+  const j = Math.max(0, Math.min(state.dates.length - 1, (i < 0 ? state.dates.length - 1 : i) + delta));
+  if (j === i) return;
+  state.date = state.dates[j];
+  $('#dateSlider').value = j;
+  paintDate(); paintFreshness(); buildDataLayer(); refreshBreaks(true);
+  syncDayNav();
+}
+function syncDayNav() {
+  const i = state.dates.indexOf(state.date);
+  const prev = $('#btnPrevDay'), next = $('#btnNextDay');
+  if (!prev || !next) return;
+  prev.disabled = i <= 0;
+  next.disabled = i < 0 || i >= state.dates.length - 1;
+}
+$('#btnPrevDay').addEventListener('click', () => stepDay(-1));
+$('#btnNextDay').addEventListener('click', () => stepDay(1));
 $('#btnMenu').addEventListener('click', () => openDrawer('menu'));
 $('#btnOffline').addEventListener('click', () => { openDrawer('offline'); updateEstimate(); showCacheInfo(); });
 
@@ -955,25 +1049,20 @@ $('#opacity').addEventListener('input', e => {
   if (dataLayer) dataLayer.setOpacity(state.opacity / 100);
 });
 
-function updateThreshLabel() {
-  const L_ = LAYERS[state.layer];
-  const t = L_.gRange[0] + (L_.gRange[1] - L_.gRange[0]) * Math.pow(state.thresh / 100, 1.6);
-  $('#thVal').textContent = t.toFixed(2) + ' ' + L_.gUnit;
-}
-$('#thresh').value = state.thresh;
-updateThreshLabel();
+$('#thresh').value = state.coverage;
+paintBreakHint();
 $('#thresh').addEventListener('input', e => {
-  state.thresh = +e.target.value; store.set('thresh', state.thresh);
-  updateThreshLabel();
+  state.coverage = +e.target.value; store.set('coverage', state.coverage);
+  paintBreakHint();
 });
-$('#thresh').addEventListener('change', () => { if (state.breaks) refreshBreaks(); });
+$('#thresh').addEventListener('change', () => { if (state.breaks) refreshBreaks(true); });
 
 $('#breakOn').checked = state.breaks;
 function setBreaks(on) {
   state.breaks = on; store.set('breaks', on);
   $('#breakOn').checked = on;
   $('#btnBreak').classList.toggle('on', on);
-  refreshBreaks();
+  refreshBreaks(true);
 }
 $('#breakOn').addEventListener('change', e => setBreaks(e.target.checked));
 $('#btnBreak').addEventListener('click', () => setBreaks(!state.breaks));
@@ -987,9 +1076,9 @@ $('#seamarkOn').addEventListener('change', e => {
 });
 $('#fadOn').checked = state.fads;
 $('#fadOn').addEventListener('change', e => setFads(e.target.checked));
-$('#fadHint').innerHTML = FADS.list.length + ' FADs off Broome, from ' + FADS.source +
-  ' (' + FADS.vintage + '). They are moored, not fixed: they break free, get pulled and get moved. ' +
-  '<a href="' + FADS.check + '" target="_blank" rel="noopener">Check DPIRD\u2019s live map</a> before you plan a trip around one.';
+$('#fadHint').innerHTML = FADS.list.length + ' FADs off Broome \u2014 ' + FADS.source +
+  ', ' + FADS.vintage + '. They are moored, not fixed: they break free, get pulled and get moved. ' +
+  '<a href="' + FADS.check + '" target="_blank" rel="noopener">Check the live listing</a> before you plan a trip around one.';
 
 $('#btnCheckNew').addEventListener('click', async () => {
   $('#btnCheckNew').textContent = 'Checking…';
@@ -1000,7 +1089,7 @@ $('#btnCheckNew').addEventListener('click', async () => {
   $('#dateSlider').max = state.dates.length - 1;
   $('#dateSlider').value = state.dates.length - 1;
   state.date = state.dates[state.dates.length - 1];
-  paintDate(); paintFreshness(); buildDataLayer(); refreshBreaks();
+  paintDate(); paintFreshness(); buildDataLayer(); refreshBreaks(true);
   $('#btnCheckNew').textContent = 'Check for new imagery';
   toast(l === before ? 'Still ' + dayLabel(l) + ' \u2014 nothing newer yet.' : 'Updated to ' + dayLabel(l), 3200);
 });
@@ -1013,11 +1102,11 @@ $('#dateSlider').addEventListener('input', e => {
   state.date = state.dates[+e.target.value];
   paintDate();
 });
-$('#dateSlider').addEventListener('change', () => { buildDataLayer(); refreshBreaks(); });
+$('#dateSlider').addEventListener('change', () => { buildDataLayer(); refreshBreaks(true); });
 $('#btnLatest').addEventListener('click', () => {
   $('#dateSlider').value = state.dates.length - 1;
   state.date = state.dates[state.dates.length - 1];
-  paintDate(); buildDataLayer(); refreshBreaks();
+  paintDate(); buildDataLayer(); refreshBreaks(true);
 });
 
 $('#btnLocate').addEventListener('click', () => {
@@ -1088,17 +1177,25 @@ $('#btnGoHome').addEventListener('click', () => {
 
 /* bottom sheet drag */
 const sheet = (() => {
-  const el = $('#sheet'), handle = $('#sheetHandle');
+  const el = $('#sheet'), btn = $('#sheetToggle'), label = $('#grabLabel');
   let sy = 0, open = false, dragging = false;
-  const setOpen = o => { open = o; el.classList.toggle('open', o); };
-  handle.addEventListener('click', () => setOpen(!open));
-  handle.addEventListener('touchstart', e => { sy = e.touches[0].clientY; dragging = true; }, { passive: true });
-  handle.addEventListener('touchmove', e => {
+  const setOpen = o => {
+    open = o;
+    el.classList.toggle('open', o);
+    btn.setAttribute('aria-expanded', o ? 'true' : 'false');
+    btn.setAttribute('aria-label', o ? 'Close panel' : 'Open panel');
+    label.textContent = o ? 'Close' : 'Conditions, tide & marks';
+  };
+  btn.addEventListener('click', () => setOpen(!open));
+  // dragging still works, but the chevron is the obvious way in
+  btn.addEventListener('touchstart', e => { sy = e.touches[0].clientY; dragging = true; }, { passive: true });
+  btn.addEventListener('touchmove', e => {
     if (!dragging) return;
     const dy = e.touches[0].clientY - sy;
     if (Math.abs(dy) > 34) { setOpen(dy < 0); dragging = false; }
   }, { passive: true });
-  handle.addEventListener('touchend', () => { dragging = false; });
+  btn.addEventListener('touchend', () => { dragging = false; });
+  setOpen(false);
   return { open: () => setOpen(true), close: () => setOpen(false) };
 })();
 $$('.tab').forEach(t => t.addEventListener('click', () => {
@@ -1112,6 +1209,7 @@ $$('.tab').forEach(t => t.addEventListener('click', () => {
 /* map events */
 map.on('click', e => showReadout(e.latlng));
 map.on('moveend', () => {
+  breaksOnMove();
   const c = map.getCenter();
   store.set('view', { lat: c.lat, lon: c.lng, zoom: map.getZoom() });
   if (!tapPt) { loadConditions(c.lat, c.lng); loadTide(c.lat, c.lng); }
@@ -1130,7 +1228,7 @@ window.addEventListener('offline', () => toast('Offline. Using saved maps.', 320
   await initDates();
   buildDataLayer();
   paintLegend();
-  refreshBreaks();
+  refreshBreaks(false);
   if (state.currents) setCurrents(true);
   const c = map.getCenter();
   loadConditions(c.lat, c.lng);
