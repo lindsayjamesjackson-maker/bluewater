@@ -34,6 +34,7 @@
 <!-- readout bubble -->
 <div id="readout" class="panel hidden">
   <button class="close" data-close="readout">&times;</button>
+  <div class="ro-title" id="roTitle" hidden></div>
   <div class="ro-pos" id="roPos">—</div>
   <div class="ro-grid">
     <div><span class="k">SST</span><b id="roSst">—</b></div>
@@ -105,15 +106,29 @@
     <input type="range" id="thresh" min="1" max="100" value="30">
     <div class="hint">Marks water where the layer changes fastest across distance. Turn sensitivity up to see only the hardest edges.</div>
 
-    <h3>Chart</h3>
+    <h3>Surface current</h3>
+    <label class="sw"><input type="checkbox" id="currentOn"> <span>Current arrows</span></label>
+    <div class="hint">Broad-scale ocean current from a global model. It does <b>not</b> show the tidal stream, which is what actually moves the water inshore of Broome on a big tide. Read it as the background drift, not the run.</div>
+
+    <h3>Marine cartography</h3>
     <label class="sw"><input type="checkbox" id="bathyOn" checked> <span>Bathymetry &amp; contours</span></label>
+    <label class="sw"><input type="checkbox" id="seamarkOn"> <span>Seamarks &mdash; buoys, beacons, lights</span></label>
     <label class="sw"><input type="checkbox" id="labelsOn" checked> <span>Place names</span></label>
     <label class="sw"><input type="checkbox" id="gebcoOn"> <span>GEBCO relief (deep detail)</span></label>
+    <div class="hint">Seamarks come from OpenSeaMap, which is crowd&#8209;sourced. Useful for orientation, <b>not</b> a substitute for the charts on your plotter. No soundings you should trust, no hazard data, no official survey.</div>
+
+    <h3>Marks &amp; FADs</h3>
+    <label class="sw"><input type="checkbox" id="fadOn" checked> <span>Broome FADs</span></label>
+    <div class="hint" id="fadHint"></div>
 
     <h3>Date</h3>
     <input type="range" id="dateSlider" min="0" max="20" value="20">
     <div class="sub2" id="dateSub">—</div>
-    <button id="btnLatest" class="btn small ghost">Jump to latest</button>
+    <div class="freshness" id="freshness">—</div>
+    <div class="row">
+      <button id="btnLatest" class="btn small ghost">Jump to latest</button>
+      <button id="btnCheckNew" class="btn small">Check for new imagery</button>
+    </div>
     <div class="drawer-close"><button class="btn" data-close="drawer">Done</button></div>
   </div>
 </div>

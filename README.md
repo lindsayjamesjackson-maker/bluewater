@@ -4,24 +4,52 @@ Satellite sea surface temperature and chlorophyll for offshore fishing, built as
 installable web app. Opens on the water off Broome, follows your GPS, works with no
 signal once you have saved the area.
 
-## Putting it on the phone
+## Where it lives
 
-The whole app is static files. It needs **HTTPS** — iOS will not give a web app
-GPS access or offline storage over plain HTTP.
+The app is served by GitHub Pages straight from this repository. Every push
+redeploys it automatically — there is no build step and nothing to upload.
 
-**On your own hosting (easiest, and the link is yours):**
+**Live at:** `https://lindsayjamesjackson-maker.github.io/bluewater/`
 
-1. Make a subdomain or folder, e.g. `bluewater.lindsayjackson.com.au`.
-2. Upload everything in this folder, keeping the structure intact.
-3. Open the URL on the iPhone in Safari (must be Safari, not Chrome).
-4. Share button → **Add to Home Screen**.
-5. Send the same link to your mates. They do step 3 and 4.
+### Putting it on the phone
 
-**Or drag-and-drop:** app.netlify.com/drop takes this folder and gives you an
-HTTPS link in about ten seconds. Free, no account needed to start.
+1. Open that URL in **Safari** (not Chrome — only Safari can install to the home
+   screen on iOS).
+2. Share button → **Add to Home Screen**.
+3. Send your mates the same link. They do the same two steps.
 
-First launch needs signal — it pulls the colour scales and the current imagery date.
-After that it will start up offline.
+First launch needs signal — it pulls the colour scales and works out the current
+imagery date. After that it starts up offline.
+
+### Your own domain (optional)
+
+To serve it from `bluewater.lindsayjackson.com.au` instead:
+
+1. Add a DNS record at your registrar: `CNAME  bluewater  →  lindsayjamesjackson-maker.github.io`
+2. In the repo: Settings → Pages → Custom domain → enter the subdomain → Save.
+3. Tick **Enforce HTTPS** once the certificate is issued (usually a few minutes).
+
+GitHub writes a `CNAME` file into the repo when you do this. Leave it there.
+
+### Updating it
+
+Ask Claude for a change. It edits the files here and pushes. Everyone picks up the
+new version next time they open the app with signal — no reinstall, no re-adding to
+the home screen.
+
+The service worker caches aggressively on purpose, so when the app itself changes
+(not just the data) the `APP` constant in `sw.js` gets bumped — `bw-app-v1` to
+`bw-app-v2` and so on. That is what tells every installed copy to fetch the new
+build.
+
+### Self-hosting instead
+
+The app is plain static files, so it will also run from any folder on normal
+hosting. Drop the whole folder into `public_html/bluewater/` and it works at
+`https://lindsayjackson.com.au/bluewater/`. The included `.htaccess` keeps
+WordPress rewrite rules and plugins away from it and sets sane cache headers.
+HTTPS is not optional — iOS gives a web app no GPS and no offline storage without
+it.
 
 ## Using it
 
@@ -46,6 +74,47 @@ Default is 0.10 °C/km. Wind it up to about 0.25 and only the hard edges survive
 which is usually what you want when you are picking one spot to run to. On the
 chlorophyll layer it measures the same thing on a log scale, so a colour change from
 0.1 to 0.3 mg/m³ reads as strongly as one from 1 to 3.
+
+### Broome FADs
+
+Four FADs are marked as standard. Tap one and you get the same readout as tapping
+open water — the temperature, the chlorophyll and the gradient at the FAD, plus range
+and bearing from the boat.
+
+The coordinates come from Recfishwest's published sheets. Two separate Recfishwest
+documents list the same four positions, which is why these are the ones in the app.
+**They are not live.** FADs are moored, not fixed: they break away, get retrieved and
+get redeployed, and DPIRD's own interactive map is the only current authority. The
+app links to it from the layers panel. Check before you plan a trip around one.
+
+### Surface current
+
+Arrows over the visible area, sampled on a grid, coloured and sized by speed. This is
+the broad-scale ocean current from a global model.
+
+It is **not** the tidal stream. Inshore of Broome on a big tide the tide is what moves
+the water, by a wide margin, and this layer will not show it. Read the arrows as
+background drift and read the tide tab for the run.
+
+### Marine cartography
+
+Bathymetry and depth contours come from the Esri Ocean basemap, with GEBCO available
+as a deeper relief layer. Seamarks — buoys, beacons, lights — come from OpenSeaMap,
+which is crowd-sourced and optional.
+
+None of this is an official chart. There are no soundings you should trust, no hazard
+data and no survey authority behind it. It is for orientation. The plotter is for
+navigation.
+
+### Imagery freshness
+
+The layers panel shows the newest day NASA has actually published, how far behind real
+time that is, and roughly when the next one should appear. **Check for new imagery**
+re-queries NASA on demand rather than waiting for the next app launch.
+
+SST normally runs about a day behind. Chlorophyll runs one to two days behind and goes
+blank under cloud. If the app opens on an older date than you expect, that is because
+NASA has not posted anything newer yet, not because the app is stale.
 
 ### Tide
 

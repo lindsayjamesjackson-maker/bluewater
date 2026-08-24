@@ -40,6 +40,25 @@ const LAYERS = {
 
 const HOME = { lat: -18.05, lon: 122.0, zoom: 8 };
 
+// Broome fish aggregating devices.
+// Source: Recfishwest published coordinate sheets. Two separate Recfishwest
+// documents list the same four positions (they number them differently), which
+// is why these are here rather than anything hand-entered. They are NOT live:
+// FADs break their moorings, get retrieved and get redeployed, and DPIRD's own
+// interactive map is the only current authority. Treat these as a starting point
+// and check before you commit to a run.
+const FADS = {
+  source: 'Recfishwest published coordinates',
+  vintage: '2019 coordinate sheets',
+  check: 'https://www.dpird.wa.gov.au/individuals/recreational-fishing/recreational-fishing-initiatives/fish-aggregating-devices/',
+  list: [
+    { name: 'Broome FAD 1', lat: -17.885650, lon: 122.148933 },
+    { name: 'Broome FAD 2', lat: -17.778633, lon: 122.134950 },
+    { name: 'Broome FAD 3', lat: -17.884567, lon: 122.031400 },
+    { name: 'Broome FAD 4', lat: -17.872683, lon: 121.847133 }
+  ]
+};
+
 /* ---------------------------- small utils --------------------------- */
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
@@ -130,6 +149,10 @@ const bathy = L.tileLayer(
 const labels = L.tileLayer(
   'https://services.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',
   { maxZoom: 13, maxNativeZoom: 13, pane: 'shadowPane', crossOrigin: true }).addTo(map);
+const seamarks = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
+  maxZoom: 13, maxNativeZoom: 13, opacity: 0.95,
+  attribution: 'OpenSeaMap', pane: 'shadowPane'
+});
 const gebco = L.tileLayer.wms('https://wms.gebco.net/mapserv', {
   layers: 'GEBCO_LATEST', format: 'image/png', transparent: false, version: '1.3.0',
   attribution: 'GEBCO', opacity: 0.85
@@ -138,6 +161,8 @@ const gebco = L.tileLayer.wms('https://wms.gebco.net/mapserv', {
 map.createPane('data'); map.getPane('data').style.zIndex = 350;
 map.createPane('breaks'); map.getPane('breaks').style.zIndex = 400;
 map.getPane('breaks').style.pointerEvents = 'none';
+map.createPane('cur'); map.getPane('cur').style.zIndex = 430;
+map.getPane('cur').style.pointerEvents = 'none';
 
 /* ------------------------ data (imagery) layer ---------------------- */
 const state = {
@@ -149,6 +174,9 @@ const state = {
   breaks: store.get('breaks', false),
   thresh: store.get('thresh', 30),
   spd: store.get('spd', 'kn'),
+  currents: store.get('currents', false),
+  seamarks: store.get('seamarks', false),
+  fads: store.get('fads', true),
   gps: null
 };
 
@@ -271,6 +299,148 @@ function refreshBreaks() {
   breakLayer.addTo(map);
 }
 
+/* ------------------------------- FADs ------------------------------- */
+const fadIcon = L.divIcon({
+  className: '', iconSize: [30, 30],
+  html: '<svg class="fad" viewBox="0 0 30 30">' +
+    '<circle cx="15" cy="15" r="10" fill="none" stroke="#ffd24a" stroke-width="2.4" stroke-dasharray="3.2 2.6"/>' +
+    '<circle cx="15" cy="15" r="3.4" fill="#ffd24a" stroke="#04121e" stroke-width="1.4"/></svg>'
+});
+const fadLayer = L.layerGroup();
+FADS.list.forEach(f => {
+  // Tapping a FAD should answer "what is the water doing there", so it opens the
+  // normal readout rather than a name-only popup.
+  L.marker([f.lat, f.lon], { icon: fadIcon, zIndexOffset: 700 })
+    .on('click', () => showReadout(L.latLng(f.lat, f.lon), f))
+    .addTo(fadLayer);
+});
+function setFads(on) {
+  state.fads = on; store.set('fads', on);
+  const el = document.getElementById('fadOn'); if (el) el.checked = on;
+  on ? fadLayer.addTo(map) : map.removeLayer(fadLayer);
+}
+
+/* --------------------------- current arrows ------------------------- */
+/* Grid-sampled surface current drawn as arrows. This is the broad-scale
+   model current, not the tidal stream - see the note in the drawer. */
+const CurrentLayer = L.Layer.extend({
+  onAdd(map) {
+    this._map = map;
+    this._canvas = L.DomUtil.create('canvas', 'bw-cur');
+    this._canvas.style.position = 'absolute';
+    map.getPane('cur').appendChild(this._canvas);
+    map.on('moveend zoomend resize', this._reset, this);
+    this._reset();
+  },
+  onRemove(map) {
+    map.off('moveend zoomend resize', this._reset, this);
+    L.DomUtil.remove(this._canvas);
+    this._pts = null;
+  },
+  _reset() {
+    const m = this._map, size = m.getSize();
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    L.DomUtil.setPosition(this._canvas, m.containerPointToLayerPoint([0, 0]));
+    this._canvas.width = size.x * dpr; this._canvas.height = size.y * dpr;
+    this._canvas.style.width = size.x + 'px';
+    this._canvas.style.height = size.y + 'px';
+    this._dpr = dpr;
+    this._load();
+  },
+  async _load() {
+    const b = this._map.getBounds();
+    const N = 6;                                  // 6x6 grid, two modest requests
+    const pts = [];
+    for (let i = 0; i < N; i++) {
+      for (let j = 0; j < N; j++) {
+        pts.push({
+          lat: b.getSouth() + (b.getNorth() - b.getSouth()) * (i + 0.5) / N,
+          lon: b.getWest() + (b.getEast() - b.getWest()) * (j + 0.5) / N
+        });
+      }
+    }
+    const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|');
+    if (key === this._key && this._pts) { this._draw(); return; }
+    this._key = key;
+    try {
+      const out = [];
+      for (let k = 0; k < pts.length; k += 25) {
+        const chunk = pts.slice(k, k + 25);
+        const url = 'https://marine-api.open-meteo.com/v1/marine?latitude=' +
+          chunk.map(p => p.lat.toFixed(3)).join(',') + '&longitude=' +
+          chunk.map(p => p.lon.toFixed(3)).join(',') +
+          '&hourly=ocean_current_velocity,ocean_current_direction' +
+          '&timezone=Australia%2FPerth&forecast_days=1';
+        const raw = await fetchJson(url, 60, false);
+        const arr = Array.isArray(raw) ? raw : [raw];
+        arr.forEach((r, i) => {
+          if (!r || !r.hourly) return;
+          const h = nearestHour(r.hourly.time);
+          const v = r.hourly.ocean_current_velocity[h];
+          const d = r.hourly.ocean_current_direction[h];
+          if (v == null || d == null) return;
+          out.push({ lat: chunk[i].lat, lon: chunk[i].lon, kn: v / 1.852, dir: d });
+        });
+      }
+      this._pts = out;
+      this._draw();
+    } catch {
+      this._pts = null;
+      const g = this._canvas.getContext('2d');
+      g.clearRect(0, 0, this._canvas.width, this._canvas.height);
+      updateCurrentKey(null);
+    }
+  },
+  _draw() {
+    const g = this._canvas.getContext('2d'), m = this._map, dpr = this._dpr || 1;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, this._canvas.width, this._canvas.height);
+    if (!this._pts || !this._pts.length) { updateCurrentKey(null); return; }
+    let max = 0;
+    this._pts.forEach(p => { if (p.kn > max) max = p.kn; });
+    const scale = Math.max(0.4, max);
+    this._pts.forEach(p => {
+      const c = m.latLngToContainerPoint([p.lat, p.lon]);
+      const frac = Math.min(1, p.kn / scale);
+      const len = 9 + 20 * frac;
+      // ocean_current_direction is the way the water is heading
+      const a = (p.dir - 90) * Math.PI / 180;
+      const dx = Math.cos(a), dy = Math.sin(a);
+      const x0 = c.x - dx * len / 2, y0 = c.y - dy * len / 2;
+      const x1 = c.x + dx * len / 2, y1 = c.y + dy * len / 2;
+      const col = p.kn < 0.5 ? 'rgba(120,205,235,.85)'
+        : p.kn < 1.2 ? 'rgba(90,225,190,.9)'
+        : p.kn < 2 ? 'rgba(255,214,74,.92)' : 'rgba(255,122,60,.95)';
+      g.strokeStyle = col; g.fillStyle = col;
+      g.lineWidth = 1.6 + 1.4 * frac; g.lineCap = 'round';
+      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
+      const hl = 4 + 3 * frac, ha = 0.45;
+      g.beginPath();
+      g.moveTo(x1, y1);
+      g.lineTo(x1 - hl * Math.cos(a - ha), y1 - hl * Math.sin(a - ha));
+      g.lineTo(x1 - hl * Math.cos(a + ha), y1 - hl * Math.sin(a + ha));
+      g.closePath(); g.fill();
+    });
+    updateCurrentKey(max);
+  }
+});
+let currentLayer = null;
+function updateCurrentKey(max) {
+  const el = document.getElementById('curkey');
+  if (!el) return;
+  el.innerHTML = max == null
+    ? '<span>Surface current</span><span>needs signal</span>'
+    : '<span>Surface current</span><span>up to ' + max.toFixed(1) + ' kn</span>';
+  el.style.display = state.currents ? '' : 'none';
+}
+function setCurrents(on) {
+  state.currents = on; store.set('currents', on);
+  const el = document.getElementById('currentOn'); if (el) el.checked = on;
+  if (currentLayer) { map.removeLayer(currentLayer); currentLayer = null; }
+  if (on) { currentLayer = new CurrentLayer(); currentLayer.addTo(map); }
+  updateCurrentKey(null);
+}
+
 /* ---------------------- point sampling for readout ------------------ */
 async function sampleAt(key, lat, lon) {
   const L_ = LAYERS[key], z = L_.maxNative, n = Math.pow(2, z);
@@ -290,17 +460,56 @@ async function sampleAt(key, lat, lon) {
 /* --------------------------- date handling -------------------------- */
 async function latestDate(key) {
   const L_ = LAYERS[key];
-  const end = new Date(), start = new Date(Date.now() - 30 * 86400000);
+  const end = new Date(Date.now() + 86400000), start = new Date(Date.now() - 30 * 86400000);
   try {
-    const u = DOMAINS + '/' + L_.id + '/default/' + L_.tms + '/-180,-85,180,85/' + iso(start) + '--' + iso(end) + '.xml';
-    const xml = await (await fetch(u)).text();
+    // A modest bbox around the region rather than the whole globe - GIBS answers
+    // it faster and it is the only water we care about being current for.
+    const u = DOMAINS + '/' + L_.id + '/default/' + L_.tms + '/108,-40,156,-8/' +
+      iso(start) + '--' + iso(end) + '.xml';
+    const xml = await (await fetch(u, { cache: 'no-store' })).text();
     const m = [...xml.matchAll(/<Domain>([^<]+)<\/Domain>/g)].pop();
     if (m) {
       const parts = m[1].split(',').pop().split('/');
-      return parts.length > 1 ? parts[1] : parts[0];
+      const d = parts.length > 1 ? parts[1] : parts[0];
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        store.set('latest.' + key, d);
+        store.set('checked.' + key, Date.now());
+        return d;
+      }
     }
   } catch {}
   return store.get('latest.' + key, iso(new Date(Date.now() - 2 * 86400000)));
+}
+
+/* How far behind real time this layer is, and what to expect next. */
+function daysBehind(dateStr) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const then = new Date(y, m - 1, d);
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  return Math.round((today - then) / 86400000);
+}
+function paintFreshness() {
+  const el = $('#freshness');
+  if (!el) return;
+  const key = state.layer, L_ = LAYERS[key];
+  const latest = state.latest[key];
+  if (!latest) { el.textContent = 'Checking what NASA has published…'; return; }
+  const behind = daysBehind(latest);
+  const typical = key === 'chl' ? 'one to two days' : 'about a day';
+  const cls = behind <= (key === 'chl' ? 2 : 1) ? 'ok' : 'old';
+  const ageTxt = behind <= 0 ? 'today' : behind === 1 ? '1 day behind' : behind + ' days behind';
+  const [yy, mm, dd] = latest.split('-').map(Number);
+  const next = new Date(yy, mm - 1, dd + 1);
+  const nextName = next.toLocaleDateString('en-AU', { weekday: 'long', day: 'numeric', month: 'short' });
+  const checked = store.get('checked.' + key, 0);
+  const ago = checked ? Math.round((Date.now() - checked) / 60000) : null;
+  el.innerHTML =
+    'Newest image NASA has published: <b>' + dayLabel(latest) + '</b>' +
+    '<span class="age ' + cls + '">' + ageTxt + '</span><br>' +
+    L_.full + ' normally runs ' + typical + ' behind, so <b>' + nextName + '</b> should appear ' +
+    (key === 'chl' ? 'over the next day or two' : 'within about a day') + '.' +
+    (ago !== null ? '<br>Last checked ' + (ago < 1 ? 'just now' : ago + ' min ago') + '.' : '') +
+    (behind > 3 ? '<br><b>Running late.</b> Heavy cloud or a processing hold at NASA will do this. Wind the date back to find the last clear pass.' : '');
 }
 function buildDates(latest) {
   const [y, m, d] = latest.split('-').map(Number);
@@ -318,6 +527,10 @@ async function initDates() {
   $('#dateSlider').max = state.dates.length - 1;
   $('#dateSlider').value = state.dates.length - 1;
   paintDate();
+  paintFreshness();
+  const seen = store.get('seenLatest.' + state.layer, null);
+  if (seen && seen !== l) toast('New ' + LAYERS[state.layer].name + ' imagery: ' + dayLabel(l), 3600);
+  store.set('seenLatest.' + state.layer, l);
 }
 function paintDate() {
   $('#dateLabel').textContent = dayLabel(state.date);
@@ -338,7 +551,10 @@ async function paintLegend() {
   $('#legend').innerHTML =
     '<div class="lg-title">' + L_.full + '</div>' +
     '<div class="lg-bar" style="background:linear-gradient(90deg,' + grad + ')"></div>' +
-    '<div class="lg-ends"><span>' + L_.fmt(lo) + '</span><span>' + L_.unit + '</span><span>' + L_.fmt(hi) + '</span></div>';
+    '<div class="lg-ends"><span>' + L_.fmt(lo) + '</span><span>' + L_.unit + '</span><span>' + L_.fmt(hi) + '</span></div>' +
+    '<div class="curkey" id="curkey" style="display:none"></div>';
+  updateCurrentKey(currentLayer && currentLayer._pts && currentLayer._pts.length
+    ? Math.max(...currentLayer._pts.map(p => p.kn)) : null);
 }
 
 /* ------------------------------- GPS -------------------------------- */
@@ -382,8 +598,20 @@ function updateFrom() {
   const b = bearing(state.gps.lat, state.gps.lon, tapPt.lat, tapPt.lng);
   $('#roFrom').textContent = nm(d).toFixed(1) + ' nm ' + compass(b);
 }
-async function showReadout(latlng) {
+async function showReadout(latlng, place) {
   tapPt = latlng;
+  const t = $('#roTitle');
+  if (place) { t.hidden = false; t.textContent = place.name; }
+  else { t.hidden = true; t.textContent = ''; }
+  const noteEl = $('#roNote');
+  if (noteEl) noteEl.remove();
+  if (place) {
+    const n = document.createElement('div');
+    n.className = 'ro-note'; n.id = 'roNote';
+    n.textContent = FADS.source + ', ' + FADS.vintage +
+      '. FADs get moved, retrieved and break their moorings \u2014 confirm on DPIRD\u2019s map before you plan around one.';
+    $('#readout').appendChild(n);
+  }
   if (!tapMarker) tapMarker = L.marker(latlng, { icon: tapIcon, zIndexOffset: 800 }).addTo(map);
   else tapMarker.setLatLng(latlng);
   $('#readout').classList.remove('hidden');
@@ -402,14 +630,19 @@ async function showReadout(latlng) {
 }
 
 /* ---------------------------- conditions ---------------------------- */
-const condCache = new Map();
-async function fetchJson(url, ttlMin) {
+const memCache = new Map();
+/* persist:false keeps a response in memory only - the current-arrow grid changes
+   with every pan, and writing each one to localStorage would fill the quota and
+   start silently breaking everything else stored there. */
+async function fetchJson(url, ttlMin, persist = true) {
   const k = 'j.' + url;
-  const c = store.get(k, null);
+  const c = persist ? store.get(k, null) : memCache.get(k);
   if (c && Date.now() - c.t < ttlMin * 60000) return c.d;
   try {
     const d = await (await fetch(url)).json();
-    store.set(k, { t: Date.now(), d });
+    const rec = { t: Date.now(), d };
+    persist ? store.set(k, rec) : memCache.set(k, rec);
+    if (!persist && memCache.size > 40) memCache.delete(memCache.keys().next().value);
     return d;
   } catch (e) {
     if (c) return c.d;
@@ -705,6 +938,7 @@ $('#layerOpts').addEventListener('change', async e => {
   $('#dateSlider').max = state.dates.length - 1;
   state.date = state.dates[idx];
   paintDate(); buildDataLayer(); refreshBreaks(); paintLegend();
+  paintFreshness();
   updateThreshLabel();
 });
 
@@ -744,6 +978,33 @@ function setBreaks(on) {
 $('#breakOn').addEventListener('change', e => setBreaks(e.target.checked));
 $('#btnBreak').addEventListener('click', () => setBreaks(!state.breaks));
 
+$('#currentOn').checked = state.currents;
+$('#currentOn').addEventListener('change', e => setCurrents(e.target.checked));
+$('#seamarkOn').checked = state.seamarks;
+$('#seamarkOn').addEventListener('change', e => {
+  state.seamarks = e.target.checked; store.set('seamarks', state.seamarks);
+  state.seamarks ? seamarks.addTo(map) : map.removeLayer(seamarks);
+});
+$('#fadOn').checked = state.fads;
+$('#fadOn').addEventListener('change', e => setFads(e.target.checked));
+$('#fadHint').innerHTML = FADS.list.length + ' FADs off Broome, from ' + FADS.source +
+  ' (' + FADS.vintage + '). They are moored, not fixed: they break free, get pulled and get moved. ' +
+  '<a href="' + FADS.check + '" target="_blank" rel="noopener">Check DPIRD\u2019s live map</a> before you plan a trip around one.';
+
+$('#btnCheckNew').addEventListener('click', async () => {
+  $('#btnCheckNew').textContent = 'Checking…';
+  const before = state.latest[state.layer];
+  const l = await latestDate(state.layer);
+  state.latest[state.layer] = l;
+  state.dates = buildDates(l);
+  $('#dateSlider').max = state.dates.length - 1;
+  $('#dateSlider').value = state.dates.length - 1;
+  state.date = state.dates[state.dates.length - 1];
+  paintDate(); paintFreshness(); buildDataLayer(); refreshBreaks();
+  $('#btnCheckNew').textContent = 'Check for new imagery';
+  toast(l === before ? 'Still ' + dayLabel(l) + ' \u2014 nothing newer yet.' : 'Updated to ' + dayLabel(l), 3200);
+});
+
 $('#bathyOn').addEventListener('change', e => e.target.checked ? bathy.addTo(map) : map.removeLayer(bathy));
 $('#labelsOn').addEventListener('change', e => e.target.checked ? labels.addTo(map) : map.removeLayer(labels));
 $('#gebcoOn').addEventListener('change', e => e.target.checked ? gebco.addTo(map) : map.removeLayer(gebco));
@@ -769,7 +1030,9 @@ $('#btnLocate').addEventListener('click', () => {
 $('#roSave').addEventListener('click', async () => {
   if (!tapPt) return;
   const [s, c] = await Promise.all([sampleAt('sst', tapPt.lat, tapPt.lng), sampleAt('chl', tapPt.lat, tapPt.lng)]);
-  const name = 'Mark ' + (marks.length + 1);
+  const titleEl = $('#roTitle');
+  const name = (titleEl && !titleEl.hidden && titleEl.textContent)
+    ? titleEl.textContent : 'Mark ' + (marks.length + 1);
   marks.push({
     name, lat: tapPt.lat, lon: tapPt.lng, date: state.date,
     sst: s && !isNaN(s.value) ? s.value : null,
@@ -861,11 +1124,14 @@ window.addEventListener('offline', () => toast('Offline. Using saved maps.', 320
 /* --------------------------------- go ------------------------------- */
 (async function boot() {
   renderMarks();
+  setFads(state.fads);
+  if (state.seamarks) seamarks.addTo(map);
   $('#btnBreak').classList.toggle('on', state.breaks);
   await initDates();
   buildDataLayer();
   paintLegend();
   refreshBreaks();
+  if (state.currents) setCurrents(true);
   const c = map.getCenter();
   loadConditions(c.lat, c.lng);
   loadTide(c.lat, c.lng);

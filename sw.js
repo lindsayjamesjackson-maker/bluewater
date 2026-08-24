@@ -1,4 +1,4 @@
-const APP = 'bw-app-v1';
+const APP = 'bw-app-v2';
 const TILES = 'bw-tiles-v1';
 const SHELL = [
   './', './index.html', './app.js', './styles.css', './manifest.webmanifest',
@@ -17,13 +17,33 @@ self.addEventListener('activate', e => {
   e.waitUntil((async () => {
     const keys = await caches.keys();
     await Promise.all(keys.filter(k => k !== APP && k !== TILES).map(k => caches.delete(k)));
+    // v1 cached the imagery date index alongside the tiles, which pinned the date
+    // picker to the day the app was first opened. Drop anything that is not a tile.
+    try {
+      const tiles = await caches.open(TILES);
+      const reqs = await tiles.keys();
+      await Promise.all(reqs.map(r => {
+        const u = new URL(r.url);
+        return isTile(u) ? null : tiles.delete(r);
+      }));
+    } catch {}
     await self.clients.claim();
   })());
 });
 
-const TILE_HOSTS = ['gibs.earthdata.nasa.gov', 'services.arcgisonline.com', 'wms.gebco.net'];
-const isTile = u => TILE_HOSTS.includes(u.hostname);
-const isApi = u => u.hostname.endsWith('open-meteo.com');
+const TILE_HOSTS = [
+  'gibs.earthdata.nasa.gov', 'services.arcgisonline.com',
+  'wms.gebco.net', 'tiles.openseamap.org'
+];
+
+// Only actual image tiles and the colour scales are safe to serve cache-first.
+// Tile URLs carry their date, so they never go stale. The layer's DescribeDomains
+// XML - which is how the app learns what the newest imagery is - very much does,
+// and caching it froze the date picker on whatever day it was first opened.
+const isTile = u => TILE_HOSTS.includes(u.hostname) &&
+  (/\.(png|jpe?g|webp)$/i.test(u.pathname) || u.pathname.includes('/colormaps/') || u.search.includes('GetMap'));
+const isFresh = u => u.hostname.endsWith('open-meteo.com') ||
+  (TILE_HOSTS.includes(u.hostname) && !isTile(u));
 
 self.addEventListener('fetch', e => {
   const req = e.request;
@@ -54,8 +74,9 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // forecast APIs: network first, fall back to whatever was last stored
-  if (isApi(url)) {
+  // anything that changes - forecasts, and the imagery date index - is
+  // network first, falling back to the last good copy only when offline
+  if (isFresh(url)) {
     e.respondWith((async () => {
       const cache = await caches.open(TILES);
       try {

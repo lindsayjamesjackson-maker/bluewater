@@ -42,6 +42,8 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
   background:rgba(12,31,46,.96);border:1px solid var(--line);border-radius:16px;padding:12px 14px;
   backdrop-filter:blur(16px);box-shadow:0 8px 30px rgba(0,0,0,.55)}
 .panel .close{position:absolute;top:6px;right:8px;font-size:22px;color:var(--dim);width:30px;height:30px}
+.ro-title{font-size:15px;font-weight:650;color:#ffd24a;margin-bottom:2px}
+.ro-note{font-size:11px;color:var(--dim);margin-top:9px;line-height:1.45}
 .ro-pos{font-size:13px;color:var(--dim);font-variant-numeric:tabular-nums;margin-bottom:8px}
 .ro-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px}
 .ro-grid .k{display:block;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
@@ -144,3 +146,25 @@ input[type=range]{width:100%;accent-color:var(--acc);height:26px}
 .boat .hd{transform-origin:13px 13px}
 .mk{width:22px;height:22px;margin:-11px 0 0 -11px}
 .tapmk{width:26px;height:26px;margin:-13px 0 0 -13px}
+
+/* imagery freshness */
+.freshness{font-size:12px;line-height:1.5;color:var(--dim);background:var(--panel);
+  border:1px solid var(--line);border-radius:11px;padding:10px 12px;margin:8px 0 2px}
+.freshness b{color:var(--ink);font-weight:600}
+.freshness .age{display:inline-block;font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+  padding:2px 7px;border-radius:999px;margin-left:6px;vertical-align:1px}
+.freshness .age.ok{background:rgba(79,208,138,.16);color:var(--ok)}
+.freshness .age.old{background:rgba(255,138,61,.16);color:var(--warm)}
+
+/* current arrows legend */
+.curkey{margin-top:6px;padding-top:6px;border-top:1px solid var(--line);
+  display:flex;justify-content:space-between;font-size:10.5px;color:var(--dim)}
+
+/* FAD markers */
+.fad{width:30px;height:30px;margin:-15px 0 0 -15px}
+.fad-pop{font-size:13px;line-height:1.5}
+.fad-pop b{display:block;font-size:14px;margin-bottom:2px}
+.fad-pop .c{font-variant-numeric:tabular-nums;color:#0b1e2c}
+.fad-pop .w{display:block;margin-top:6px;font-size:11px;color:#6b4a20}
+.leaflet-popup-content-wrapper{background:#dbe9f2;color:#0b1e2c;border-radius:12px}
+.leaflet-popup-tip{background:#dbe9f2}
