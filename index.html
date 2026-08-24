@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Bluewater</title>
+<meta name="description" content="Sea surface temperature, chlorophyll and temp breaks for offshore fishing.">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#04121e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Bluewater">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- top bar -->
+<header id="topbar">
+  <button id="btnLayers" class="chip" aria-label="Layers">
+    <span class="dot" id="layerDot"></span><span id="layerName">SST</span>
+  </button>
+  <button id="btnDate" class="chip" aria-label="Date"><span id="dateLabel">—</span></button>
+  <div class="spacer"></div>
+  <button id="btnOffline" class="icon" title="Save for offline" aria-label="Save for offline"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11m0 0 4.2-4.2M12 14l-4.2-4.2"/><path d="M4 17v2.2A1.8 1.8 0 0 0 5.8 21h12.4A1.8 1.8 0 0 0 20 19.2V17"/></svg></button>
+  <button id="btnMenu" class="icon" title="Menu" aria-label="Menu"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+</header>
+
+<!-- readout bubble -->
+<div id="readout" class="panel hidden">
+  <button class="close" data-close="readout">&times;</button>
+  <div class="ro-pos" id="roPos">—</div>
+  <div class="ro-grid">
+    <div><span class="k">SST</span><b id="roSst">—</b></div>
+    <div><span class="k">Break</span><b id="roGrad">—</b></div>
+    <div><span class="k">Chl-a</span><b id="roChl">—</b></div>
+    <div><span class="k">From boat</span><b id="roFrom">—</b></div>
+  </div>
+  <div class="ro-actions">
+    <button id="roSave" class="btn small">Save mark</button>
+    <button id="roGo" class="btn small ghost">Copy coords</button>
+  </div>
+</div>
+
+<!-- bottom sheet -->
+<div id="sheet" class="sheet">
+  <div class="handle" id="sheetHandle"><span></span></div>
+  <div class="sheet-body">
+    <div class="tabs">
+      <button class="tab active" data-tab="cond">Conditions</button>
+      <button class="tab" data-tab="tide">Tide</button>
+      <button class="tab" data-tab="marks">Marks</button>
+    </div>
+
+    <section class="tabpane active" id="tab-cond">
+      <div class="sub" id="condWhere">—</div>
+      <div id="condCards" class="cards"></div>
+      <div class="hint" id="condHint"></div>
+    </section>
+
+    <section class="tabpane" id="tab-tide">
+      <div class="sub" id="tideWhere">—</div>
+      <canvas id="tideChart" height="150"></canvas>
+      <div id="tideList" class="tidelist"></div>
+      <div class="hint">Astronomical prediction from published harmonic constituents (TICON-4, CC&#8209;BY&#8209;4.0). Heights are metres above chart datum (LAT). Weather can push the real water level either way. Not for navigation.</div>
+    </section>
+
+    <section class="tabpane" id="tab-marks">
+      <div id="marksList" class="marks"></div>
+      <div class="row">
+        <button id="btnExportGpx" class="btn small">Export GPX</button>
+        <button id="btnClearMarks" class="btn small ghost">Clear all</button>
+      </div>
+      <div class="hint">GPX imports into Raymarine LightHouse, Navionics, OpenCPN and most plotters.</div>
+    </section>
+  </div>
+</div>
+
+<!-- floating buttons -->
+<div id="fabs">
+  <button id="btnBreak" class="fab" title="Break finder" aria-label="Break finder"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 8.5c3.2 0 3.6-4 6.6-4s3.4 4 6.6 4 3.6-2.6 6.8-2.6" opacity=".38"/><path d="M2 13c3.2 0 3.6-4 6.6-4s3.4 4 6.6 4 3.6-2.6 6.8-2.6"/><path d="M2 18.6c3.2 0 3.6-4 6.6-4s3.4 4 6.6 4 3.6-2.6 6.8-2.6" opacity=".38"/></svg></button>
+  <button id="btnLocate" class="fab" title="Find me" aria-label="Find me"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M21 3 10.6 21l-1.8-7.8L1 11.4z"/></svg></button>
+</div>
+
+<!-- legend -->
+<div id="legend" class="legend"></div>
+
+<!-- layers drawer -->
+<div id="drawer" class="drawer hidden">
+  <div class="drawer-in">
+    <h3>Data layer</h3>
+    <div class="opts" id="layerOpts"></div>
+
+    <h3>Opacity <span class="val" id="opVal">80%</span></h3>
+    <input type="range" id="opacity" min="0" max="100" value="80">
+
+    <h3>Break finder</h3>
+    <label class="sw"><input type="checkbox" id="breakOn"> <span>Show breaks</span></label>
+    <div class="sub2">Sensitivity <span class="val" id="thVal"></span></div>
+    <input type="range" id="thresh" min="1" max="100" value="30">
+    <div class="hint">Marks water where the layer changes fastest across distance. Turn sensitivity up to see only the hardest edges.</div>
+
+    <h3>Chart</h3>
+    <label class="sw"><input type="checkbox" id="bathyOn" checked> <span>Bathymetry &amp; contours</span></label>
+    <label class="sw"><input type="checkbox" id="labelsOn" checked> <span>Place names</span></label>
+    <label class="sw"><input type="checkbox" id="gebcoOn"> <span>GEBCO relief (deep detail)</span></label>
+
+    <h3>Date</h3>
+    <input type="range" id="dateSlider" min="0" max="20" value="20">
+    <div class="sub2" id="dateSub">—</div>
+    <button id="btnLatest" class="btn small ghost">Jump to latest</button>
+    <div class="drawer-close"><button class="btn" data-close="drawer">Done</button></div>
+  </div>
+</div>
+
+<!-- offline drawer -->
+<div id="offline" class="drawer hidden">
+  <div class="drawer-in">
+    <h3>Take it offline</h3>
+    <p class="hint">Saves the map you are looking at onto the phone so it still works once the bars drop off. Do this on wi&#8209;fi before you leave.</p>
+    <div class="sub2">Detail <span class="val" id="dlVal"></span></div>
+    <input type="range" id="dlZoom" min="9" max="12" value="10">
+    <label class="sw"><input type="checkbox" id="dlAllDates"> <span>Include the last 5 days of imagery</span></label>
+    <div id="dlEstimate" class="est">—</div>
+    <button id="btnDownload" class="btn wide">Download this area</button>
+    <div class="progress hidden" id="dlProg"><div class="bar" id="dlBar"></div><span id="dlText"></span></div>
+    <h3>Stored</h3>
+    <div id="cacheInfo" class="est">—</div>
+    <button id="btnClearCache" class="btn small ghost">Clear stored maps</button>
+    <div class="drawer-close"><button class="btn" data-close="offline">Done</button></div>
+  </div>
+</div>
+
+<!-- menu drawer -->
+<div id="menu" class="drawer hidden">
+  <div class="drawer-in">
+    <h3>Bluewater</h3>
+    <p class="hint">Satellite sea surface temperature and chlorophyll for offshore fishing, plus tide, wind and swell.</p>
+    <h3>Units</h3>
+    <div class="opts" id="unitOpts">
+      <label class="sw"><input type="radio" name="spd" value="kn" checked> <span>Wind in knots</span></label>
+      <label class="sw"><input type="radio" name="spd" value="kmh"> <span>Wind in km/h</span></label>
+    </div>
+    <h3>Home port</h3>
+    <div class="row">
+      <button id="btnSetHome" class="btn small">Set to current view</button>
+      <button id="btnGoHome" class="btn small ghost">Go home</button>
+    </div>
+    <h3>Where the data comes from</h3>
+    <ul class="src">
+      <li><b>Chlorophyll&#8209;a</b> &mdash; VIIRS on NOAA&#8209;21, via NASA GIBS. Daily, roughly 1&nbsp;km.</li>
+      <li><b>Sea surface temperature</b> &mdash; GHRSST Level&nbsp;4 MUR, via NASA GIBS. Daily blended analysis.</li>
+      <li><b>Bathymetry</b> &mdash; Esri Ocean Basemap and GEBCO.</li>
+      <li><b>Wind, swell, current</b> &mdash; Open&#8209;Meteo forecast and marine models.</li>
+      <li><b>Tide</b> &mdash; harmonic constituents from the Neaps tide database (TICON&#8209;4), computed on the phone.</li>
+    </ul>
+    <p class="hint">Cloud blanks out the satellite layers. If today looks empty, wind the date back a day or two. Imagery is an aid, not a navigation instrument.</p>
+    <div class="drawer-close"><button class="btn" data-close="menu">Done</button></div>
+  </div>
+</div>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="vendor/leaflet.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
