@@ -180,19 +180,42 @@ const state = {
   seamarks: store.get('seamarks', false),
   fads: store.get('fads', true),
   gps: null,
-  tlIdx: 0
+  tlIdx: null,   // hour-of-day (0-23) selected on the timeline; null = "not computed yet"
+  tlDay: 0,      // days from today the timeline is showing (0 = today)
+  tlPage: store.get('tlPage', 'wind'),  // which graph the timeline shows: 'wind' | 'current'
+  tideDay: 0     // days from today the Tide tab is showing
 };
-/* hourly wind + current + sea state for the next 24h from the focus point,
-   sliced from Open-Meteo's hourly arrays starting at "now" - drives the
+/* hourly wind + current + sea state for one calendar day at the focus point,
+   sliced from Open-Meteo's hourly arrays for state.tlDay - drives the
    bottom timeline scrubber, the Conditions cards, and the wind/current
    map arrow layers so they can all show a forecast hour, not just now. */
-let tlData = null;
+let tlData = null;   // the sliced single day currently shown
+let tlFull = null;   // the raw multi-day fetch {w, m} tlData is sliced from
+const TL_DAY_MIN = -3, TL_DAY_MAX = 10;
 function fmtClock(iso) {
   const d = new Date(iso);
   let h = d.getHours();
   const ap = h >= 12 ? 'pm' : 'am';
   h = h % 12; if (h === 0) h = 12;
   return h + ap;
+}
+function localDateStr(d) {
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+function addDays(base, n) {
+  const d = new Date(base); d.setDate(d.getDate() + n); return d;
+}
+function dayLabelFor(n) {
+  if (n === 0) return 'Today';
+  if (n === 1) return 'Tomorrow';
+  if (n === -1) return 'Yesterday';
+  return addDays(new Date(), n).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+/* the exact Open-Meteo hourly timestamp the timeline is currently reading -
+   used to pick the matching hour out of any other Open-Meteo response
+   (grid points for the arrow layers), since they share the same tz/hour grid */
+function tlTargetTime() {
+  return (tlData && tlData.times && tlData.times[state.tlIdx]) ? tlData.times[state.tlIdx] : null;
 }
 
 let dataLayer = null;
@@ -447,7 +470,9 @@ const CurrentLayer = L.Layer.extend({
         });
       }
     }
-    const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + state.tlIdx;
+    const target = tlTargetTime();
+    const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + target;
+    if (!target) { this._pts = null; this._draw(); return; }
     if (key === this._key && this._pts) { this._draw(); return; }
     this._key = key;
     try {
@@ -458,13 +483,13 @@ const CurrentLayer = L.Layer.extend({
           chunk.map(p => p.lat.toFixed(3)).join(',') + '&longitude=' +
           chunk.map(p => p.lon.toFixed(3)).join(',') +
           '&hourly=ocean_current_velocity,ocean_current_direction' +
-          '&timezone=Australia%2FPerth&forecast_days=2';
+          '&timezone=Australia%2FPerth&past_days=' + Math.max(0, -TL_DAY_MIN) + '&forecast_days=' + (TL_DAY_MAX + 1);
         const raw = await fetchJson(url, 60, false);
         const arr = Array.isArray(raw) ? raw : [raw];
         arr.forEach((r, i) => {
           if (!r || !r.hourly) return;
-          const base = nearestHour(r.hourly.time);
-          const h = Math.min(r.hourly.time.length - 1, base + state.tlIdx);
+          const h = r.hourly.time.indexOf(target);
+          if (h < 0) return;
           const v = r.hourly.ocean_current_velocity[h];
           const d = r.hourly.ocean_current_direction[h];
           if (v == null || d == null) return;
@@ -571,7 +596,9 @@ const WindLayer = L.Layer.extend({
         });
       }
     }
-    const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + state.tlIdx + '@' + state.spd;
+    const target = tlTargetTime();
+    const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + target + '@' + state.spd;
+    if (!target) { this._pts = null; this._draw(); return; }
     if (key === this._key && this._pts) { this._draw(); return; }
     this._key = key;
     try {
@@ -582,13 +609,14 @@ const WindLayer = L.Layer.extend({
           chunk.map(p => p.lat.toFixed(3)).join(',') + '&longitude=' +
           chunk.map(p => p.lon.toFixed(3)).join(',') +
           '&hourly=wind_speed_10m,wind_direction_10m' +
-          '&timezone=Australia%2FPerth&forecast_days=2&wind_speed_unit=' + (state.spd === 'kn' ? 'kn' : 'kmh');
+          '&timezone=Australia%2FPerth&past_days=' + Math.max(0, -TL_DAY_MIN) + '&forecast_days=' + (TL_DAY_MAX + 1) +
+          '&wind_speed_unit=' + (state.spd === 'kn' ? 'kn' : 'kmh');
         const raw = await fetchJson(url, 60, false);
         const arr = Array.isArray(raw) ? raw : [raw];
         arr.forEach((r, i) => {
           if (!r || !r.hourly) return;
-          const base = nearestHour(r.hourly.time);
-          const h = Math.min(r.hourly.time.length - 1, base + state.tlIdx);
+          const h = r.hourly.time.indexOf(target);
+          if (h < 0) return;
           const v = r.hourly.wind_speed_10m[h];
           const d = r.hourly.wind_direction_10m[h];
           if (v == null || d == null) return;
@@ -655,6 +683,22 @@ function setWind(on) {
   if (windLayer) { map.removeLayer(windLayer); windLayer = null; }
   if (on) { windLayer = new WindLayer(); windLayer.addTo(map); }
   updateWindKey(null);
+}
+function paintWcSeg() {
+  $$('#wcSeg button').forEach(b => b.classList.toggle('on', b.dataset.wc === state.tlPage));
+}
+/* Tapping Wind/Current up top works like the map-type buttons: it picks
+   the page AND drives that arrow layer on the map (mutually exclusive,
+   same one-tap pattern as SST/Chl/Anom). The Settings checkboxes still
+   work for finer control - e.g. turning arrows off without losing the
+   graph you're looking at. */
+function setTlPage(page) {
+  state.tlPage = page; store.set('tlPage', page);
+  paintWcSeg();
+  if (page === 'wind') { if (!state.wind) setWind(true); if (state.currents) setCurrents(false); }
+  else { if (!state.currents) setCurrents(true); if (state.wind) setWind(false); }
+  renderTimelineGraph();
+  updateTlValue();
 }
 
 /* ---------------------- point sampling for readout ------------------ */
@@ -883,45 +927,79 @@ function card(k, v, s, warn) {
     (s ? '<div class="s">' + s + '</div>' : '') + '</div>';
 }
 async function loadConditions(lat, lon) {
+  state.tlLat = lat; state.tlLon = lon;
+  await refreshTimeline();
+}
+async function refreshTimeline() {
+  const lat = state.tlLat, lon = state.tlLon;
+  if (lat == null) return;
   const la = lat.toFixed(2), lo = lon.toFixed(2);
+  const past = Math.max(0, -TL_DAY_MIN), fwd = TL_DAY_MAX + 1;
   const wUrl = 'https://api.open-meteo.com/v1/forecast?latitude=' + la + '&longitude=' + lo +
     '&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m,temperature_2m&daily=sunrise,sunset' +
-    '&timezone=Australia%2FPerth&forecast_days=2&wind_speed_unit=' + (state.spd === 'kn' ? 'kn' : 'kmh');
+    '&timezone=Australia%2FPerth&past_days=' + past + '&forecast_days=' + fwd +
+    '&wind_speed_unit=' + (state.spd === 'kn' ? 'kn' : 'kmh');
   const mUrl = 'https://marine-api.open-meteo.com/v1/marine?latitude=' + la + '&longitude=' + lo +
     '&hourly=wave_height,wave_period,swell_wave_height,swell_wave_period,swell_wave_direction,' +
     'sea_surface_temperature,ocean_current_velocity,ocean_current_direction' +
-    '&timezone=Australia%2FPerth&forecast_days=2';
+    '&timezone=Australia%2FPerth&past_days=' + past + '&forecast_days=' + fwd;
   try {
     const [w, m] = await Promise.all([fetchJson(wUrl, 45), fetchJson(mUrl, 45)]);
-    const i = nearestHour(w.hourly.time);
-    const j = nearestHour(m.hourly.time);
-    const n = 24;
-    tlData = {
-      lat, lon,
-      times: w.hourly.time.slice(i, i + n),
-      wind: w.hourly.wind_speed_10m.slice(i, i + n),
-      gust: w.hourly.wind_gusts_10m.slice(i, i + n),
-      wdir: w.hourly.wind_direction_10m.slice(i, i + n),
-      wave: m.hourly.wave_height.slice(j, j + n),
-      swell: m.hourly.swell_wave_height.slice(j, j + n),
-      swellP: m.hourly.swell_wave_period.slice(j, j + n),
-      swellDir: m.hourly.swell_wave_direction.slice(j, j + n),
-      cur: m.hourly.ocean_current_velocity.slice(j, j + n),
-      cdir: m.hourly.ocean_current_direction.slice(j, j + n),
-      sunrise: w.daily.sunrise, sunset: w.daily.sunset
-    };
-    const max = $('#tlSlider'); if (max) { max.max = tlData.wind.length - 1; }
-    if (state.tlIdx > tlData.wind.length - 1) state.tlIdx = 0;
-    if ($('#tlSlider')) $('#tlSlider').value = state.tlIdx;
-    renderCondAt(state.tlIdx);
-    renderTimelineGraph();
+    tlFull = { w, m };
+    sliceTimelineDay();
   } catch {
-    tlData = null;
+    tlFull = null; tlData = null;
     $('#condWhere').textContent = 'For ' + fmtPos(lat, lon);
     $('#condCards').innerHTML = '<div class="empty">No forecast right now. It will fill in when you have signal.</div>';
     $('#condHint').textContent = '';
     renderTimelineGraph();
+    syncTlDayNav();
   }
+}
+function sliceTimelineDay() {
+  if (!tlFull) return;
+  const { w, m } = tlFull;
+  const target = localDateStr(addDays(new Date(), state.tlDay));
+  const idxs = []; w.hourly.time.forEach((t, i) => { if (t.slice(0, 10) === target) idxs.push(i); });
+  if (!idxs.length) { tlData = null; renderTimelineGraph(); syncTlDayNav(); return; }
+  const i0 = idxs[0], n = idxs.length;
+  const mIdxs = []; m.hourly.time.forEach((t, i) => { if (t.slice(0, 10) === target) mIdxs.push(i); });
+  const j0 = mIdxs.length ? mIdxs[0] : i0;
+  tlData = {
+    lat: state.tlLat, lon: state.tlLon,
+    times: w.hourly.time.slice(i0, i0 + n),
+    wind: w.hourly.wind_speed_10m.slice(i0, i0 + n),
+    gust: w.hourly.wind_gusts_10m.slice(i0, i0 + n),
+    wdir: w.hourly.wind_direction_10m.slice(i0, i0 + n),
+    wave: m.hourly.wave_height.slice(j0, j0 + n),
+    swell: m.hourly.swell_wave_height.slice(j0, j0 + n),
+    swellP: m.hourly.swell_wave_period.slice(j0, j0 + n),
+    swellDir: m.hourly.swell_wave_direction.slice(j0, j0 + n),
+    cur: m.hourly.ocean_current_velocity.slice(j0, j0 + n),
+    cdir: m.hourly.ocean_current_direction.slice(j0, j0 + n),
+    sunrise: w.daily.sunrise, sunset: w.daily.sunset
+  };
+  const slider = $('#tlSlider');
+  if (state.tlIdx == null || state.tlIdx > n - 1) {
+    state.tlIdx = state.tlDay === 0 ? nearestHour(tlData.times) : Math.floor(n / 2);
+  }
+  if (slider) { slider.max = n - 1; slider.value = state.tlIdx; }
+  renderCondAt(state.tlIdx);
+  renderTimelineGraph();
+  syncTlDayNav();
+}
+function stepTlDay(delta) {
+  const nd = Math.max(TL_DAY_MIN, Math.min(TL_DAY_MAX, state.tlDay + delta));
+  if (nd === state.tlDay) return;
+  state.tlDay = nd; state.tlIdx = null;
+  sliceTimelineDay();
+  if (currentLayer) currentLayer.refresh();
+  if (windLayer) windLayer.refresh();
+}
+function syncTlDayNav() {
+  const label = $('#tlDayLabel'); if (label) label.textContent = dayLabelFor(state.tlDay);
+  const prev = $('#tlPrevDay'); if (prev) prev.disabled = state.tlDay <= TL_DAY_MIN;
+  const next = $('#tlNextDay'); if (next) next.disabled = state.tlDay >= TL_DAY_MAX;
 }
 function renderCondAt(idx) {
   if (!tlData || !tlData.times.length) return;
@@ -933,8 +1011,9 @@ function renderCondAt(idx) {
   const cv = tlData.cur[idx], cd = tlData.cdir[idx];
   const rough = ws != null && (state.spd === 'kn' ? ws >= 18 : ws >= 33);
   const sr = (tlData.sunrise[0] || '').slice(11, 16), ss = (tlData.sunset[0] || '').slice(11, 16);
-  const when = idx === 0 ? 'now' : fmtClock(tlData.times[idx]);
-  $('#condWhere').textContent = 'For ' + fmtPos(tlData.lat, tlData.lon) + (idx === 0 ? '' : ' · ' + when + ' forecast');
+  const isNow = state.tlDay === 0 && idx === nearestHour(tlData.times);
+  const when = (isNow ? 'now' : dayLabelFor(state.tlDay) + ' ' + fmtClock(tlData.times[idx]));
+  $('#condWhere').textContent = 'For ' + fmtPos(tlData.lat, tlData.lon) + (isNow ? '' : ' · ' + when + ' forecast');
   $('#condCards').innerHTML =
     card('Wind', ws == null ? '—' : Math.round(ws) + ' ' + u, wd == null ? '' : compass(wd) + ' · gust ' + Math.round(wg), rough) +
     card('Sea', wh == null ? '—' : wh.toFixed(1) + ' m', 'combined') +
@@ -942,16 +1021,19 @@ function renderCondAt(idx) {
     card('Current', cv == null ? '—' : (cv / 1.852).toFixed(1) + ' kn', cd == null ? '' : 'setting ' + compass(cd)) +
     card('Light', sr + ' – ' + ss, 'sunrise – sunset');
   $('#condHint').textContent = rough
-    ? (idx === 0 ? 'Model wind is up around ' : 'Model wind is forecast up around ') + Math.round(ws) + ' ' + u + '. Check the BOM coastal waters forecast before you commit.'
+    ? (isNow ? 'Model wind is up around ' : 'Model wind is forecast up around ') + Math.round(ws) + ' ' + u + '. Check the BOM coastal waters forecast before you commit.'
     : 'Forecast model output, updated hourly. Always cross-check the BOM coastal waters forecast.';
   updateTlTimeLabel();
+  updateTlValue();
 }
 
 /* ------------------------------ timeline ----------------------------- */
-/* A Windy-style scrubber: bars are wind speed, the pale line is gusts,
-   dragging moves state.tlIdx (0 = now, up to 23h ahead) which drives the
-   Conditions cards and - after a short pause - the wind and current
-   map arrow layers. */
+/* A Windy-style scrubber. Wind page: speed and gusts as two overlaid
+   filled lines on the same axis. Current page: a single speed line.
+   Dragging moves state.tlIdx (hour of the selected day) which drives the
+   Conditions cards, the value line under the graph, and - after a short
+   pause - the wind and current map arrow layers. Day arrows page through
+   state.tlDay (past_days/forecast_days fetched up front, sliced per day). */
 function renderTimelineGraph() {
   const cv = $('#tlGraph');
   if (!cv) return;
@@ -962,12 +1044,14 @@ function renderTimelineGraph() {
   const g = cv.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
-  if (!tlData || !tlData.wind.length) { positionPlayhead(); return; }
-  const n = tlData.wind.length;
+  const nowMark = $('#tlNowMark');
+  if (!tlData || !tlData.times.length) { positionPlayhead(); if (nowMark) nowMark.classList.add('hidden'); return; }
+  const n = tlData.times.length;
   const bw = w / n;
-  // night shading using sunrise/sunset for today + tomorrow
+  const baseY = h - 12;
+  // night shading using sunrise/sunset for the day either side
   const bands = [];
-  for (let d = 0; d < 2; d++) {
+  for (let d = 0; d < tlData.sunrise.length; d++) {
     const sr = tlData.sunrise[d], ss = tlData.sunset[d];
     if (sr) bands.push({ t: new Date(sr).getTime(), on: false });
     if (ss) bands.push({ t: new Date(ss).getTime(), on: true });
@@ -979,34 +1063,67 @@ function renderTimelineGraph() {
     for (const b of bands) { if (tt >= b.t) night = b.on; }
     if (night) { g.fillStyle = 'rgba(0,0,0,.16)'; g.fillRect(i * bw, 0, bw + 0.5, h); }
   });
-  const gustVals = tlData.gust.map(v => v == null ? 0 : v);
-  const maxV = Math.max(state.spd === 'kn' ? 10 : 18, ...gustVals);
-  tlData.wind.forEach((v, i) => {
-    if (v == null) return;
-    const col = v < (state.spd === 'kn' ? 8 : 15) ? 'rgba(120,205,235,.65)'
-      : v < (state.spd === 'kn' ? 15 : 28) ? 'rgba(90,225,190,.75)'
-      : v < (state.spd === 'kn' ? 22 : 41) ? 'rgba(255,214,74,.85)' : 'rgba(255,122,60,.9)';
-    const bh = (v / maxV) * (h - 12);
-    g.fillStyle = col;
-    g.fillRect(i * bw + 1, h - 10 - bh, Math.max(1, bw - 2), bh);
+  const X = i => i * bw + bw / 2;
+  const area = (vals, maxV, fillStyle, strokeStyle) => {
+    g.beginPath();
+    vals.forEach((v, i) => { const x = X(i), y = baseY - (Math.max(0, v || 0) / maxV) * (baseY - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.lineTo(X(n - 1), baseY); g.lineTo(X(0), baseY); g.closePath();
+    g.fillStyle = fillStyle; g.fill();
+    g.beginPath();
+    vals.forEach((v, i) => { const x = X(i), y = baseY - (Math.max(0, v || 0) / maxV) * (baseY - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.strokeStyle = strokeStyle; g.lineWidth = 1.6; g.stroke();
+  };
+  if (state.tlPage === 'current') {
+    const cur = tlData.cur.map(v => v == null ? 0 : v / 1.852);
+    const maxV = Math.max(1, ...cur) * 1.15;
+    area(cur, maxV, 'rgba(90,225,190,.32)', 'rgba(120,225,235,.9)');
+  } else {
+    const gust = tlData.gust.map(v => v == null ? 0 : v);
+    const wind = tlData.wind.map(v => v == null ? 0 : v);
+    const maxV = Math.max(state.spd === 'kn' ? 10 : 18, ...gust) * 1.1;
+    area(gust, maxV, 'rgba(255,122,60,.22)', 'rgba(255,122,60,.55)');
+    area(wind, maxV, 'rgba(90,225,190,.38)', 'rgba(120,225,235,.95)');
+  }
+  // hour ticks
+  g.fillStyle = 'rgba(143,176,196,.85)'; g.font = '9px -apple-system,sans-serif'; g.textAlign = 'center';
+  [0, 6, 12, 18].forEach(hr => {
+    const i = tlData.times.findIndex(t => new Date(t).getHours() === hr);
+    if (i < 0) return;
+    const label = hr === 0 ? '12am' : hr === 12 ? '12pm' : hr < 12 ? hr + 'am' : (hr - 12) + 'pm';
+    const tx = Math.min(w - 14, Math.max(14, X(i)));
+    g.fillText(label, tx, h - 1);
   });
-  g.strokeStyle = 'rgba(255,255,255,.6)'; g.lineWidth = 1.3; g.beginPath();
-  gustVals.forEach((v, i) => {
-    const x = i * bw + bw / 2, y = h - 10 - (v / maxV) * (h - 12);
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  });
-  g.stroke();
+  g.textAlign = 'left';
+  // "now" reference tick, separate from the draggable playhead
+  if (nowMark) {
+    const nowI = state.tlDay === 0 ? nearestHour(tlData.times) : -1;
+    if (nowI >= 0) { nowMark.style.left = (((nowI + 0.5) / n) * 100) + '%'; nowMark.classList.remove('hidden'); }
+    else nowMark.classList.add('hidden');
+  }
   positionPlayhead();
 }
 function positionPlayhead() {
   const head = $('#tlHead'); if (!head) return;
-  const n = tlData && tlData.wind.length ? tlData.wind.length : 24;
+  const n = tlData && tlData.times.length ? tlData.times.length : 24;
   const frac = (state.tlIdx + 0.5) / n;
   head.style.left = (frac * 100) + '%';
 }
 function updateTlTimeLabel() {
   const tEl = $('#tlTime'); if (!tEl || !tlData) return;
-  tEl.textContent = state.tlIdx === 0 ? fmtClock(new Date().toISOString()) + ' now' : fmtClock(tlData.times[state.tlIdx]);
+  tEl.textContent = fmtClock(tlData.times[state.tlIdx]);
+}
+function updateTlValue() {
+  const el = $('#tlValue'); if (!el) return;
+  if (!tlData) { el.textContent = '—'; return; }
+  const idx = state.tlIdx;
+  if (state.tlPage === 'current') {
+    const cv = tlData.cur[idx], cd = tlData.cdir[idx];
+    el.textContent = cv == null ? '—' : (cv / 1.852).toFixed(1) + ' kn' + (cd != null ? ' · setting ' + compass(cd) : '');
+  } else {
+    const u = state.spd === 'kn' ? 'kn' : 'km/h';
+    const ws = tlData.wind[idx], wg = tlData.gust[idx], wd = tlData.wdir[idx];
+    el.textContent = ws == null ? '—' : Math.round(ws) + ' ' + u + (wd != null ? ' ' + compass(wd) : '') + ' · gusts ' + Math.round(wg) + ' ' + u;
+  }
 }
 
 /* ------------------------------- tide ------------------------------- */
@@ -1025,7 +1142,9 @@ function nearestStation(list, lat, lon) {
   return { s: best, d: bd };
 }
 let tideCache = null;
+let tideMap = null;  // {t0,t1,w,h,X,Y} from the last draw, for the drag-to-read handler
 async function loadTide(lat, lon) {
+  state.tideLat = lat; state.tideLon = lon;
   let list;
   try { list = await getStations(); } catch { $('#tideWhere').textContent = 'Tide data unavailable.'; return; }
   const { s, d } = nearestStation(list, lat, lon);
@@ -1033,25 +1152,39 @@ async function loadTide(lat, lon) {
   const off = s.off != null ? s.off : 0;
   const cons = s.c.map(c => ({ name: c[0], amplitude: c[1], phase: c[2] }));
   const p = createTidePredictor(cons, { phaseKey: 'phase' });
-  const start = new Date(); start.setHours(0, 0, 0, 0);
-  const end = new Date(start.getTime() + 2 * 86400000);
-  const ext = p.getExtremesPrediction({ start, end, timeFidelity: 60 })
+  const dayStart = addDays(new Date(), state.tideDay); dayStart.setHours(0, 0, 0, 0);
+  const extStart = new Date(dayStart.getTime() - 6 * 3600000);
+  const extEnd = new Date(dayStart.getTime() + 30 * 3600000);
+  const ext = p.getExtremesPrediction({ start: extStart, end: extEnd, timeFidelity: 60 })
     .map(e => ({ t: new Date(e.time), h: e.level + off, high: !!e.high }));
-  const tl = p.getTimelinePrediction({ start: new Date(Date.now() - 6 * 3600000), end: new Date(Date.now() + 18 * 3600000), timeFidelity: 900 })
+  const winStart = state.tideDay === 0 ? new Date(Date.now() - 6 * 3600000) : new Date(dayStart.getTime() - 3 * 3600000);
+  const winEnd = state.tideDay === 0 ? new Date(Date.now() + 18 * 3600000) : new Date(dayStart.getTime() + 27 * 3600000);
+  const tl = p.getTimelinePrediction({ start: winStart, end: winEnd, timeFidelity: 900 })
     .map(e => ({ t: new Date(e.time), h: e.level + off }));
   tideCache = { s, ext, tl, off };
   const km = (d / 1000).toFixed(0);
   $('#tideWhere').textContent = s.n + (s.r ? ', ' + s.r : '') + ' · ' + km + ' km from the mark';
-  const now = Date.now();
-  const upcoming = ext.filter(e => e.t.getTime() > now - 3600000).slice(0, 6);
+  const dayEnd = dayStart.getTime() + 86400000;
+  const upcoming = state.tideDay === 0
+    ? ext.filter(e => e.t.getTime() > Date.now() - 3600000).slice(0, 6)
+    : ext.filter(e => e.t.getTime() >= dayStart.getTime() && e.t.getTime() < dayEnd);
   $('#tideList').innerHTML = upcoming.map(e =>
     '<div class="t ' + (e.high ? 'hi' : 'lo') + '"><div class="lab">' + (e.high ? 'High' : 'Low') + '</div>' +
     '<div class="tm">' + pad(e.t.getHours()) + ':' + pad(e.t.getMinutes()) + '</div>' +
     '<div class="h">' + e.h.toFixed(2) + ' m</div></div>').join('') ||
     '<div class="empty">No tide extremes in range.</div>';
   drawTide(tl, ext);
+  syncTideDayNav();
 }
-function drawTide(tl, ext) {
+function stepTideDay(delta) {
+  state.tideDay += delta;
+  hideTideReadout();
+  if (state.tideLat != null) loadTide(state.tideLat, state.tideLon);
+}
+function syncTideDayNav() {
+  const label = $('#tideDayLabel'); if (label) label.textContent = dayLabelFor(state.tideDay);
+}
+function drawTide(tl, ext, markX) {
   const c = $('#tideChart');
   const dpr = window.devicePixelRatio || 1;
   const w = c.clientWidth || 320, h = 150;
@@ -1063,6 +1196,7 @@ function drawTide(tl, ext) {
   const t0 = tl[0].t.getTime(), t1 = tl[tl.length - 1].t.getTime();
   const X = t => 6 + (t - t0) / (t1 - t0) * (w - 12);
   const Y = v => h - 22 - (v - lo) / (hi - lo) * (h - 40);
+  tideMap = { t0, t1, w, h, X, Y };
   // grid
   g.strokeStyle = '#1e3f56'; g.lineWidth = 1; g.font = '10px -apple-system,sans-serif'; g.fillStyle = '#8fb0c4';
   for (let k = 0; k <= 4; k++) {
@@ -1080,16 +1214,61 @@ function drawTide(tl, ext) {
   g.beginPath();
   tl.forEach((p, i) => { const x = X(p.t.getTime()), y = Y(p.h); i ? g.lineTo(x, y) : g.moveTo(x, y); });
   g.strokeStyle = '#31c2f0'; g.lineWidth = 2; g.stroke();
-  // now line
-  const nx = X(Date.now());
-  g.strokeStyle = '#ff8a3d'; g.lineWidth = 1.5; g.setLineDash([3, 3]);
-  g.beginPath(); g.moveTo(nx, 6); g.lineTo(nx, h - 22); g.stroke(); g.setLineDash([]);
+  // now line - only meaningful when looking at today
+  if (state.tideDay === 0) {
+    const nx = X(Date.now());
+    g.strokeStyle = '#ff8a3d'; g.lineWidth = 1.5; g.setLineDash([3, 3]);
+    g.beginPath(); g.moveTo(nx, 6); g.lineTo(nx, h - 22); g.stroke(); g.setLineDash([]);
+  }
   // hour ticks
   g.fillStyle = '#8fb0c4';
   for (let t = t0; t <= t1; t += 6 * 3600000) {
     const d = new Date(t); const x = X(t);
     g.fillText(pad(d.getHours()) + ':00', Math.min(w - 34, Math.max(4, x - 14)), h - 7);
   }
+  // drag-to-read marker
+  if (markX != null) {
+    const frac = Math.min(1, Math.max(0, (markX - 6) / (w - 12)));
+    const t = t0 + frac * (t1 - t0);
+    const hgt = tideHeightAt(tl, t);
+    if (hgt != null) {
+      const x = X(t), y = Y(hgt);
+      g.strokeStyle = '#fff'; g.lineWidth = 1.4;
+      g.beginPath(); g.moveTo(x, 6); g.lineTo(x, h - 22); g.stroke();
+      g.beginPath(); g.arc(x, y, 4, 0, Math.PI * 2); g.fillStyle = '#fff'; g.fill();
+      g.strokeStyle = '#31c2f0'; g.lineWidth = 2; g.stroke();
+    }
+  }
+}
+function tideHeightAt(tl, t) {
+  if (!tl || !tl.length) return null;
+  if (t <= tl[0].t.getTime()) return tl[0].h;
+  if (t >= tl[tl.length - 1].t.getTime()) return tl[tl.length - 1].h;
+  for (let i = 0; i < tl.length - 1; i++) {
+    const a = tl[i].t.getTime(), b = tl[i + 1].t.getTime();
+    if (t >= a && t <= b) {
+      const f = (t - a) / (b - a);
+      return tl[i].h + (tl[i + 1].h - tl[i].h) * f;
+    }
+  }
+  return null;
+}
+function hideTideReadout() {
+  const el = $('#tideReadout'); if (el) el.classList.add('hidden');
+}
+function tideReadAt(clientX) {
+  if (!tideMap || !tideCache) return;
+  const rect = $('#tideChart').getBoundingClientRect();
+  const px = clientX - rect.left;
+  const frac = Math.min(1, Math.max(0, (px - 6) / (tideMap.w - 12)));
+  const t = tideMap.t0 + frac * (tideMap.t1 - tideMap.t0);
+  const hgt = tideHeightAt(tideCache.tl, t);
+  drawTide(tideCache.tl, tideCache.ext, px);
+  const el = $('#tideReadout'); if (!el || hgt == null) return;
+  const d = new Date(t);
+  el.textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ' · ' + hgt.toFixed(2) + ' m';
+  el.style.left = Math.min(rect.width - 8, Math.max(8, px)) + 'px';
+  el.classList.remove('hidden');
 }
 
 /* ------------------------------ marks ------------------------------- */
@@ -1308,6 +1487,11 @@ $('#currentOn').addEventListener('change', e => setCurrents(e.target.checked));
 $('#windOn').checked = state.wind;
 $('#windOn').addEventListener('change', e => setWind(e.target.checked));
 
+/* wind / current page selector, up in the top bar - picks which forecast
+   the timeline graph and value line show. Arrow visibility on the map
+   stays independently controlled by the two checkboxes above. */
+$$('#wcSeg button').forEach(b => b.addEventListener('click', () => setTlPage(b.dataset.wc)));
+
 /* timeline scrubber - cheap redraw on every drag tick, layer refetch debounced */
 let tlDebounce = null;
 const tlSliderEl = $('#tlSlider');
@@ -1326,14 +1510,15 @@ if (tlSliderEl) {
 const tlNowBtn = $('#tlNow');
 if (tlNowBtn) {
   tlNowBtn.addEventListener('click', () => {
-    state.tlIdx = 0;
-    if (tlSliderEl) tlSliderEl.value = 0;
-    renderCondAt(0);
-    positionPlayhead();
+    state.tlDay = 0; state.tlIdx = null;
+    sliceTimelineDay();
     if (currentLayer) currentLayer.refresh();
     if (windLayer) windLayer.refresh();
   });
 }
+const tlPrevBtn = $('#tlPrevDay'), tlNextBtn = $('#tlNextDay');
+if (tlPrevBtn) tlPrevBtn.addEventListener('click', () => stepTlDay(-1));
+if (tlNextBtn) tlNextBtn.addEventListener('click', () => stepTlDay(1));
 const tlToggleBtn = $('#tlToggle');
 if (tlToggleBtn) {
   tlToggleBtn.addEventListener('click', () => {
@@ -1483,6 +1668,25 @@ $$('.tab').forEach(t => t.addEventListener('click', () => {
   if (t.dataset.tab === 'tide' && tideCache) drawTide(tideCache.tl, tideCache.ext);
 }));
 
+/* tide day nav + tap/drag-to-read */
+const tidePrevBtn = $('#tidePrevDay'), tideNextBtn = $('#tideNextDay'), tideTodayBtn = $('#tideToday');
+if (tidePrevBtn) tidePrevBtn.addEventListener('click', () => stepTideDay(-1));
+if (tideNextBtn) tideNextBtn.addEventListener('click', () => stepTideDay(1));
+if (tideTodayBtn) tideTodayBtn.addEventListener('click', () => { if (state.tideDay !== 0) { state.tideDay = 0; hideTideReadout(); if (state.tideLat != null) loadTide(state.tideLat, state.tideLon); } });
+const tideChartEl = $('#tideChart');
+if (tideChartEl) {
+  let tideDragging = false;
+  const start = e => { tideDragging = true; tideReadAt((e.touches ? e.touches[0] : e).clientX); };
+  const move = e => { if (!tideDragging) return; tideReadAt((e.touches ? e.touches[0] : e).clientX); if (e.touches) e.preventDefault(); };
+  const end = () => { tideDragging = false; };
+  tideChartEl.addEventListener('mousedown', start);
+  tideChartEl.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', end);
+  tideChartEl.addEventListener('touchstart', start, { passive: true });
+  tideChartEl.addEventListener('touchmove', move, { passive: false });
+  tideChartEl.addEventListener('touchend', end);
+}
+
 /* map events */
 map.on('click', e => showReadout(e.latlng));
 map.on('moveend', () => {
@@ -1508,6 +1712,7 @@ window.addEventListener('offline', () => toast('Offline. Using saved maps.', 320
   refreshBreaks(false);
   if (state.currents) setCurrents(true);
   if (state.wind) setWind(true);
+  paintWcSeg();
   const c = map.getCenter();
   loadConditions(c.lat, c.lng);
   loadTide(c.lat, c.lng);

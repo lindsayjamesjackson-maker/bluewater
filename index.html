@@ -29,12 +29,10 @@
       <button data-layer="sstA" role="tab">Anom</button>
     </div>
     <div class="spacer"></div>
-    <button id="btnOffline" class="icon" title="Save for offline" aria-label="Save for offline">
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11m0 0 4.2-4.2M12 14l-4.2-4.2"/><path d="M4 17v2.2A1.8 1.8 0 0 0 5.8 21h12.4A1.8 1.8 0 0 0 20 19.2V17"/></svg>
-    </button>
-    <button id="btnMenu" class="icon" title="Settings" aria-label="Settings">
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-    </button>
+    <div class="seg" id="wcSeg" aria-label="Wind and current arrows">
+      <button data-wc="wind">Wind</button>
+      <button data-wc="current">Current</button>
+    </div>
   </div>
   <div class="bar-row">
     <div class="datenav">
@@ -88,10 +86,24 @@
     </section>
 
     <section class="tabpane" id="tab-tide">
+      <div class="tide-nav">
+        <button id="tidePrevDay" class="tl-daybtn" aria-label="Previous day">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+        </button>
+        <span id="tideDayLabel" class="tl-daylabel">Today</span>
+        <button id="tideNextDay" class="tl-daybtn" aria-label="Next day">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
+        </button>
+        <span class="spacer"></span>
+        <button id="tideToday" class="tl-nowbtn">Today</button>
+      </div>
       <div class="sub" id="tideWhere">&mdash;</div>
-      <canvas id="tideChart" height="150"></canvas>
+      <div class="tide-chartwrap">
+        <canvas id="tideChart" height="150"></canvas>
+        <div id="tideReadout" class="tide-readout hidden"></div>
+      </div>
       <div id="tideList" class="tidelist"></div>
-      <div class="hint">Astronomical prediction from published harmonic constituents (TICON&#8209;4, CC&#8209;BY&#8209;4.0). Heights are metres above chart datum (LAT). Weather can push the real water level either way. Not for navigation.</div>
+      <div class="hint">Astronomical prediction from published harmonic constituents (TICON&#8209;4, CC&#8209;BY&#8209;4.0). Heights are metres above chart datum (LAT). Weather can push the real water level either way. Not for navigation. Tap or drag the chart to read the height at a time — the arrows step through other days, past or future.</div>
     </section>
 
     <section class="tabpane" id="tab-marks">
@@ -112,20 +124,35 @@
   </button>
   <div class="tl-body">
     <div class="tl-head">
-      <span class="tl-label">Wind &amp; current</span>
-      <span id="tlTime" class="tl-time">Now</span>
+      <button id="tlPrevDay" class="tl-daybtn" aria-label="Previous day">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <span id="tlDayLabel" class="tl-daylabel">Today</span>
+      <button id="tlNextDay" class="tl-daybtn" aria-label="Next day">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
+      </button>
+      <span class="spacer"></span>
+      <span id="tlTime" class="tl-time">&mdash;</span>
       <button id="tlNow" class="tl-nowbtn">Now</button>
     </div>
     <div class="tl-graphwrap">
       <canvas id="tlGraph" height="46"></canvas>
+      <div id="tlNowMark" class="tl-nowmark hidden"></div>
       <div id="tlHead" class="tl-playhead"></div>
     </div>
-    <input type="range" id="tlSlider" class="tl-slider" min="0" max="23" value="0" step="1" aria-label="Forecast hour">
+    <input type="range" id="tlSlider" class="tl-slider" min="0" max="23" value="0" step="1" aria-label="Hour of day">
+    <div id="tlValue" class="tl-value">&mdash;</div>
   </div>
 </div>
 
 <!-- floating buttons -->
 <div id="fabs">
+  <button id="btnOffline" class="fab" title="Save for offline" aria-label="Save for offline">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v11m0 0 4.2-4.2M12 14l-4.2-4.2"/><path d="M4 17v2.2A1.8 1.8 0 0 0 5.8 21h12.4A1.8 1.8 0 0 0 20 19.2V17"/></svg>
+  </button>
+  <button id="btnMenu" class="fab" title="Settings" aria-label="Settings">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+  </button>
   <button id="btnBreak" class="fab" title="Break finder" aria-label="Break finder">
     <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
       <path d="M2 8.5c3.2 0 3.6-4 6.6-4s3.4 4 6.6 4 3.6-2.6 6.8-2.6" opacity=".38"/>
@@ -170,7 +197,7 @@
     <h3>Wind &amp; current arrows</h3>
     <label class="sw"><input type="checkbox" id="windOn"> <span>Wind arrows</span></label>
     <label class="sw"><input type="checkbox" id="currentOn"> <span>Current arrows</span></label>
-    <div class="hint">Both are forecast model output, and both follow the timeline scrubber above the map buttons — drag it to see wind and current change through the day. Current is a broad&#8209;scale ocean model. It does <b>not</b> show the tidal stream, which is what actually moves the water inshore of Broome on a big tide — read it as background drift, not the run. For that, use the Tide tab, which does capture Broome's real tidal swing.</div>
+    <div class="hint">Same as the Wind / Current buttons up top. Both are forecast model output, and both follow the timeline scrubber above the map buttons — drag it, or step through days, to see wind and current change over time. Current is a broad&#8209;scale ocean model. It does <b>not</b> show the tidal stream, which is what actually moves the water inshore of Broome on a big tide — read it as background drift, not the run. For that, use the Tide tab, which does capture Broome's real tidal swing and can also be stepped forward or back to any day.</div>
 
     <h3>Marine cartography</h3>
     <label class="sw"><input type="checkbox" id="bathyOn" checked> <span>Bathymetry &amp; contours</span></label>

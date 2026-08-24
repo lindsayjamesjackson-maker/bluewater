@@ -83,12 +83,14 @@ number that lights up a good edge in one layer paints nothing at all in another.
 ### Map type and date
 
 The three buttons top-left switch between SST, chlorophyll and anomaly in one tap.
-Below them, the arrows either side of the date step back and forward a day at a time
-without opening settings. Forward greys out when you are on the newest imagery NASA
-has published, because there is nothing after it.
+Next to them, **Wind** / **Current** picks which forecast the timeline below is
+showing (see the next section). Under both, the arrows either side of the date step
+back and forward a day at a time without opening settings. Forward greys out when you
+are on the newest imagery NASA has published, because there is nothing after it.
 
-Everything else — opacity, break sensitivity, cartography, current, FADs, units —
-lives in **Settings** behind the menu button.
+The floating buttons on the right, top to bottom, are: save for offline, settings,
+break finder, find me. Everything else — opacity, break sensitivity, cartography,
+FAD visibility, units — lives in **Settings**.
 
 ### Broome FADs
 
@@ -103,21 +105,30 @@ get retrieved and get moved. The app links to the official listing from Settings
 
 ### Wind, gusts and current — the timeline
 
-A Windy-style scrubber sits above the map buttons: bars for forecast wind speed over
-the next 24 hours, coloured by strength, with a pale line for gusts on top and a
-day/night shading behind them. Drag the dot (or tap **Now** to snap back) and the
-Conditions cards update to that hour, and — if the arrow layers are turned on in
-Settings — the wind and current arrows on the map redraw for that hour too, after a
-short pause so it isn't refetching on every pixel of drag.
+A Windy-style scrubber sits above the map buttons, one graph at a time: tap **Wind**
+or **Current** up top to switch which one it's showing. On the Wind page, speed and
+gusts are drawn as two filled lines overlaid on the same axis — speed solid, gusts the
+paler line behind it — over day/night shading, with the values for wherever you've
+dragged to printed underneath. The Current page is the same idea with one line, speed
+and heading printed underneath.
+
+Drag the dot and the Conditions cards, the value line, and — if that layer is turned on
+in Settings — the wind or current arrows on the map all update to that hour, arrows
+redrawing after a short pause so it isn't refetching on every pixel of drag. The arrows
+you see follow whichever hour the timeline is sitting on, on whichever page is showing.
+
+The arrows either side of **Today** step the whole timeline to another day, past or
+forecast — Open-Meteo keeps a few days of recent history and forecasts about ten days
+out, and the day arrows stop at either end of that. **Now** snaps straight back to
+today at the current hour.
 
 Both arrow layers are grid-sampled over the visible area, coloured and sized by speed.
-Wind is a standard forecast model, updated hourly, and does change meaningfully through
-the day — that's the point of the slider. Current does too, but the current layer is a
-**broad-scale ocean current** from a global model, not the tidal stream. Inshore of
-Broome on a big tide, the tide is what actually moves the water, by a wide margin, and
-this layer won't show that. Read the current arrows as background drift and read the
-**Tide** tab — which does capture Broome's real swing from harmonic constituents — for
-the run.
+Wind is a standard forecast model and does change meaningfully hour to hour — that's
+the point of the slider. Current does too, but the current layer is a **broad-scale
+ocean current** from a global model, not the tidal stream. Inshore of Broome on a big
+tide, the tide is what actually moves the water, by a wide margin, and this layer won't
+show that. Read the current arrows as background drift and read the **Tide** tab —
+which does capture Broome's real swing from harmonic constituents — for the run.
 
 ### Marine cartography
 
@@ -153,6 +164,12 @@ signal at all. Broome, Derby, Port Hedland, Wyndham and 120-odd other Australian
 ports are built in — it picks the closest to wherever you tapped. Heights are metres
 above chart datum, the same reference the BOM tables use. It is an astronomical
 prediction: a blow or a big pressure change will shift the real water level.
+
+Tap or drag anywhere on the tide graph and a readout pins to your finger showing the
+height at that exact time. The arrows above the chart step to another day — because
+this is pure astronomical prediction with no forecast window to run out of, it goes as
+far back or forward as you like, so you can check the tide for a trip you're planning
+next week, or one you took last month. **Today** snaps back to the present.
 
 ### Marks
 
