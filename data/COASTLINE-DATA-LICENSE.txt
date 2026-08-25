@@ -1,0 +1,12 @@
+wa-coastline.json is cropped and simplified from Natural Earth's 1:10m Coastline
+dataset (naturalearthdata.com), via the geojson mirror at
+github.com/nvkelso/natural-earth-vector.
+
+Natural Earth is public domain. No permission is needed to use it in any way,
+including commercially. Attribution is not required but is appreciated:
+"Made with Natural Earth."
+
+Cropped to the WA Kimberley/Pilbara coast (roughly 11.5-21.5S, 117.5-130.5E)
+and simplified with Ramer-Douglas-Peucker (tolerance ~300m) to keep the file
+small - this is a for-orientation outline, not survey-grade coastline data,
+the same caveat as the rest of the app's cartography (see README).
