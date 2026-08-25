@@ -110,13 +110,16 @@ a smooth coloured field across the whole screen, the same way SST, chlorophyll a
 anomaly work. It replaces the satellite layer rather than sitting on top of it, so
 there's one thing on screen at a time. The coast and land stay visible on top of the
 field rather than getting painted over, turned right down so the colour underneath
-reads clearly — the coastline and place names stay marked regardless, from a
-reference layer that's never dimmed. A dense field of small streaks genuinely flows
-over the top of everything — land included — each one drifting in the direction of
-the wind or current at its speed, fading in and looping round rather than sitting
-still or just flickering in place, with a dark outline so they stay readable over
-pale water and pale coastline alike; colour carries the speed too. Tap SST, Chl or
-Anom to go back to the satellite view —
+reads clearly. A crisp white coastline, cropped from real Natural Earth coastline
+data for the Kimberley and Pilbara coast, is drawn over the top so land and water
+stay unmistakable however transparent the basemap gets underneath — it isn't a
+navigation chart, just a clear line between the two. A dense field of small streaks
+genuinely flows over the top of everything — land included — each one drifting in
+the direction of the wind or current at its own speed (a gentle drift for a 2 kn
+current, a proper flow for a stiff wind), fading in and out rather than popping in
+or flickering, with a dark outline so they stay readable over pale water and pale
+coastline alike; colour carries the speed too. Tap SST, Chl or Anom to go back to
+the satellite view —
 whichever forecast you last had showing stays remembered for next time you tap
 Wind or Current again.
 
@@ -125,12 +128,16 @@ time — its label sits between the day and the time so it's always clear which 
 you're looking at. The line itself is colour-coded the same way the field on the map
 is: calm reads blue, a stiff sea-breeze reads green through orange, so you can read
 the strength of the day at a glance before you even drag it, over day/night shading,
-with the values for wherever you've dragged to printed underneath. Drag anywhere
-across the graph itself, not just underneath it, to scrub.
+with the values for wherever you've dragged to printed underneath. Reference lines
+at round numbers — 15, 30 kn and so on, scaled to whatever range the day actually
+has — sit behind the graph with a unit on the top line, so the strength reads as an
+actual number, not just a colour. Drag anywhere across the graph itself, not just
+underneath it, to scrub.
 
 On the Wind page a second, smaller selector appears under the Wind/Current buttons —
-**Wind** or **Gusts** — for which one the graph and its colour are showing. Current
-only ever has the one line, so it stays out of the way there.
+**Wind** or **Gusts** — for which one is showing, both the graph below and the
+coloured field on the map itself. Current only ever has the one line, so it stays
+out of the way there.
 
 Dragging updates the Conditions cards, the value line, and the field on the map all to
 that hour — the field redraws after a short pause so it isn't refetching on every
@@ -214,6 +221,7 @@ weeks Safari may evict the storage and you will need to download the area again.
 | Sea surface temperature | GHRSST L4 MUR, via NASA GIBS | Daily blended analysis, gap-free |
 | SST anomaly | GHRSST L4 MUR anomalies | How far today sits off the seasonal average |
 | Chart and bathymetry | Esri Ocean Basemap, GEBCO | Contours and shelf edge |
+| Coastline outline | Natural Earth 1:10m coastline, public domain | Cropped to WA's Kimberley/Pilbara coast, bundled locally |
 | Wind, swell, current | Open-Meteo | Forecast models, free, no key |
 | Tide | Neaps tide database (TICON-4), CC-BY-4.0 | Computed locally |
 
@@ -242,7 +250,7 @@ app.js                  all the logic
 styles.css              styling
 sw.js                   service worker (offline)
 manifest.webmanifest    home-screen install details
-data/                   Australian tide harmonics
+data/                   Australian tide harmonics, WA coastline outline
 vendor/                 Leaflet, tide predictor (bundled, no CDN)
 icons/                  app icons
 ```

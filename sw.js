@@ -1,11 +1,11 @@
-const APP = 'bw-app-v7';
+const APP = 'bw-app-v8';
 const TILES = 'bw-tiles-v1';
 const SHELL = [
   './', './index.html', './app.js', './styles.css', './manifest.webmanifest',
   './vendor/leaflet.js', './vendor/leaflet.css', './vendor/tide-predictor.js',
   './vendor/images/marker-icon.png', './vendor/images/marker-icon-2x.png', './vendor/images/marker-shadow.png',
   './vendor/images/layers.png', './vendor/images/layers-2x.png',
-  './data/au-tide-stations.json',
+  './data/au-tide-stations.json', './data/wa-coastline.json',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'
 ];
 

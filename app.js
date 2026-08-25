@@ -170,6 +170,24 @@ map.getPane('cur').style.pointerEvents = 'none';
 map.createPane('arrows'); map.getPane('arrows').style.zIndex = 390;
 map.getPane('arrows').style.pointerEvents = 'none';
 
+/* A real coastline, not just the basemap's own linework - cropped from
+   Natural Earth's 1:10m coastline (public domain, see data/COASTLINE-
+   DATA-LICENSE.txt) to the Kimberley/Pilbara coast and simplified down to
+   a small local file, same pattern as the tide station data. Drawn in
+   shadowPane alongside the reference layer above, so like that layer it
+   is never dimmed or painted over - the one place on screen you can always
+   tell land from water, wind/current view especially, where the basemap's
+   own land fill is turned right down. A dark casing under a pale line
+   keeps it readable over both bright water colours and pale land alike. */
+(async function loadCoastline() {
+  try {
+    const runs = await (await fetch('data/wa-coastline.json')).json();
+    const opts = { pane: 'shadowPane', interactive: false, lineJoin: 'round', lineCap: 'round' };
+    L.polyline(runs, Object.assign({}, opts, { color: '#04141f', weight: 3.2, opacity: 0.55 })).addTo(map);
+    L.polyline(runs, Object.assign({}, opts, { color: '#eaf6ff', weight: 1.3, opacity: 0.95 })).addTo(map);
+  } catch { /* offline before the first save, or the file hasn't cached yet - the reference layer still shows through */ }
+})();
+
 /* ------------------------ data (imagery) layer ---------------------- */
 const state = {
   layer: store.get('layer', 'sst'),
@@ -523,7 +541,7 @@ function initParticles(n, size) {
   const arr = [];
   for (let k = 0; k < n; k++) {
     const x = Math.random() * size.x, y = Math.random() * size.y;
-    arr.push({ x, y, px: x, py: y, age: Math.floor(Math.random() * 90), life: 70 + Math.random() * 80 });
+    arr.push({ x, y, px: x, py: y, age: Math.floor(Math.random() * 90), life: 70 + Math.random() * 80, lastAngle: null });
   }
   return arr;
 }
@@ -548,9 +566,12 @@ function drawFieldFrame(fieldCanvas, arrowCanvas, m, dpr, grid, fieldImg, N, kin
   fg.drawImage(fieldImg, 0, 0, N, N, 0, 0, size.x, size.y);
   if (!state.showArrows || !particles) return;
   ag.lineCap = 'round';
-  // current speeds are a fraction of wind speeds in knots - scale each
-  // kind against its own top colour-stop so both still visibly flow
-  const maxKn = kind === 'wind' ? 38 : 2.5;
+  // speed is anchored to the real value in knots, not a fraction of some
+  // per-kind maximum - a fraction-of-max scale made a 2 kn current look as
+  // brisk as the strongest current on the map, when it should barely drift.
+  // The same px-per-knot applies to wind and current alike, so a 2 kn current
+  // reads as a slow crawl and a 20 kn wind reads as a proper flow.
+  const PX_PER_KNOT = 0.3;
   for (const pt of particles) {
     const j = Math.max(0, Math.min(N - 1, Math.floor(pt.x / size.x * N)));
     const i = Math.max(0, Math.min(N - 1, Math.floor(pt.y / size.y * N)));
@@ -562,16 +583,32 @@ function drawFieldFrame(fieldCanvas, arrowCanvas, m, dpr, grid, fieldImg, N, kin
       pt.x = Math.random() * size.x; pt.y = Math.random() * size.y;
       pt.px = pt.x; pt.py = pt.y;
       pt.age = 0; pt.life = 70 + Math.random() * 80;
+      pt.lastAngle = null;
       continue;
     }
     // wind_direction_10m is where the wind is FROM; ocean_current_direction is where it's heading
     const a = ((kind === 'wind' ? cell.dir + 180 : cell.dir) - 90) * Math.PI / 180;
-    const speedFrac = Math.max(0, Math.min(1, cell.kn / maxKn));
-    const speedPx = 0.8 + speedFrac * 5.2; // screen px this particle advances per tick
+    // where two grid cells disagree sharply on direction (a convergence or
+    // shear line), nearest-cell lookup makes a particle crossing that
+    // boundary flip direction every frame instead of flowing through it -
+    // read as "sitting there and shaking". Catch a big frame-to-frame swing
+    // and fade the particle out early instead of letting it vibrate in place.
+    if (pt.lastAngle != null) {
+      let da = Math.abs(a - pt.lastAngle) % (Math.PI * 2);
+      if (da > Math.PI) da = Math.PI * 2 - da;
+      if (da > Math.PI / 2 && pt.life - pt.age > 9) pt.life = pt.age + 9;
+    }
+    pt.lastAngle = a;
+    const speedPx = Math.min(8.5, 0.1 + cell.kn * PX_PER_KNOT); // screen px this particle advances per tick
     pt.px = pt.x; pt.py = pt.y;
     pt.x += Math.cos(a) * speedPx;
     pt.y += Math.sin(a) * speedPx;
-    const alpha = 0.9 * Math.min(1, pt.age / 8);
+    // fade in over the first few frames after a spawn, fade out over the
+    // last few before it dies (whether from natural expiry or the early
+    // shear cutoff above) so nothing pops in or vanishes abruptly
+    const fadeIn = Math.min(1, pt.age / 8);
+    const fadeOut = Math.min(1, (pt.life - pt.age) / 9);
+    const alpha = 0.9 * Math.min(fadeIn, fadeOut);
     if (alpha <= 0.02) continue;
     const hl = 3.4, ha = 0.5;
     const hx1 = pt.x - hl * Math.cos(a - ha), hy1 = pt.y - hl * Math.sin(a - ha);
@@ -690,7 +727,11 @@ let currentLayer = null;
 
 /* Same grid-and-field approach, sampling forecast wind speed/direction.
    Always fetched in true knots regardless of the display unit, so the
-   field colour stays correct however Settings has units set. */
+   field colour stays correct however Settings has units set. Both wind
+   and gust speed come back in the one fetch, so switching the Wind/Gusts
+   selector just re-picks which value each grid cell uses (see
+   _buildFromRaw) rather than re-fetching - the map field and the timeline
+   graph then always agree on which one is showing. */
 const WindLayer = L.Layer.extend(Object.assign({}, FieldLayerBase, {
   _cls: 'bw-wind', _kind: 'wind',
   async _load() {
@@ -699,35 +740,45 @@ const WindLayer = L.Layer.extend(Object.assign({}, FieldLayerBase, {
     const target = tlTargetTime();
     const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + target;
     if (!target) { this._grid = null; this._fieldImg = null; return; }
-    if (key === this._key && this._grid) return;
-    this._key = key;
-    try {
-      const grid = new Array(N * N).fill(null);
-      for (let k = 0; k < pts.length; k += 25) {
-        const chunk = pts.slice(k, k + 25);
-        const url = 'https://api.open-meteo.com/v1/forecast?latitude=' +
-          chunk.map(p => p.lat.toFixed(3)).join(',') + '&longitude=' +
-          chunk.map(p => p.lon.toFixed(3)).join(',') +
-          '&hourly=wind_speed_10m,wind_direction_10m' +
-          '&timezone=Australia%2FPerth&past_days=' + Math.max(0, -TL_DAY_MIN) + '&forecast_days=' + (TL_DAY_MAX + 1) +
-          '&wind_speed_unit=kn';
-        const raw = await fetchJson(url, 60, false);
-        const arr = Array.isArray(raw) ? raw : [raw];
-        arr.forEach((r, i) => {
-          if (!r || !r.hourly) return;
-          const h = r.hourly.time.indexOf(target);
-          if (h < 0) return;
-          const v = r.hourly.wind_speed_10m[h];
-          const d = r.hourly.wind_direction_10m[h];
-          if (v == null || d == null) return;
-          grid[k + i] = { lat: chunk[i].lat, lon: chunk[i].lon, kn: v, dir: d };
-        });
+    if (key !== this._key || !this._raw) {
+      this._key = key;
+      try {
+        const raw = new Array(N * N).fill(null);
+        for (let k = 0; k < pts.length; k += 25) {
+          const chunk = pts.slice(k, k + 25);
+          const url = 'https://api.open-meteo.com/v1/forecast?latitude=' +
+            chunk.map(p => p.lat.toFixed(3)).join(',') + '&longitude=' +
+            chunk.map(p => p.lon.toFixed(3)).join(',') +
+            '&hourly=wind_speed_10m,wind_gusts_10m,wind_direction_10m' +
+            '&timezone=Australia%2FPerth&past_days=' + Math.max(0, -TL_DAY_MIN) + '&forecast_days=' + (TL_DAY_MAX + 1) +
+            '&wind_speed_unit=kn';
+          const res = await fetchJson(url, 60, false);
+          const arr = Array.isArray(res) ? res : [res];
+          arr.forEach((r, i) => {
+            if (!r || !r.hourly) return;
+            const h = r.hourly.time.indexOf(target);
+            if (h < 0) return;
+            const v = r.hourly.wind_speed_10m[h];
+            const g = r.hourly.wind_gusts_10m ? r.hourly.wind_gusts_10m[h] : null;
+            const d = r.hourly.wind_direction_10m[h];
+            if (v == null || d == null) return;
+            raw[k + i] = { lat: chunk[i].lat, lon: chunk[i].lon, wind: v, gust: g != null ? g : v, dir: d };
+          });
+        }
+        this._raw = raw;
+      } catch {
+        this._raw = null;
       }
-      this._grid = grid;
-      this._fieldImg = buildFieldImage(N, grid, 'wind');
-    } catch {
-      this._grid = null; this._fieldImg = null;
     }
+    this._buildFromRaw();
+  },
+  _buildFromRaw() {
+    const N = FIELD_N;
+    if (!this._raw) { this._grid = null; this._fieldImg = null; return; }
+    const metric = state.windMetric === 'gust' ? 'gust' : 'wind';
+    const grid = this._raw.map(c => c ? { lat: c.lat, lon: c.lon, kn: c[metric], dir: c.dir } : null);
+    this._grid = grid;
+    this._fieldImg = buildFieldImage(N, grid, 'wind');
   }
 }));
 let windLayer = null;
@@ -1152,6 +1203,35 @@ function renderTimelineGraph() {
     if (night) { g.fillStyle = 'rgba(0,0,0,.16)'; g.fillRect(i * bw, 0, bw + 0.5, h); }
   });
   const X = i => i * bw + bw / 2;
+  /* Reference gridlines at round numbers (5/10/15kn and so on, picked to
+     suit whatever range is on screen) with a small value key down the left
+     edge and a unit label in the corner - so the strength of the day reads
+     as an actual number, not just a colour, the same way Windy's scrubber
+     does. Drawn before the coloured area so the fill still shows through
+     it at low alpha, and the lines read clearly above the fill line. */
+  const niceStep = maxV => {
+    const target = maxV / 4;
+    const steps = [1, 2, 5, 10, 15, 20, 25, 50, 100];
+    for (const s of steps) if (target <= s) return s;
+    return Math.ceil(target / 50) * 50;
+  };
+  const drawRefLines = (maxV, unit) => {
+    const step = niceStep(maxV);
+    const marks = [];
+    for (let v = step; v < maxV; v += step) marks.push(v);
+    g.font = '8px -apple-system,sans-serif'; g.textAlign = 'left';
+    marks.forEach((v, idx) => {
+      const y = baseY - (v / maxV) * (baseY - 4);
+      g.strokeStyle = 'rgba(143,176,196,.22)'; g.lineWidth = 1;
+      g.beginPath(); g.moveTo(0, y); g.lineTo(w, y); g.stroke();
+      g.fillStyle = 'rgba(214,228,238,.8)';
+      // the unit only needs to appear once - fold it into the top line's
+      // label rather than a separate corner key, which crowded it when the
+      // top gridline landed near the very top of the graph
+      const label = idx === marks.length - 1 ? v + ' ' + unit : String(v);
+      g.fillText(label, 3, Math.max(9, y - 2));
+    });
+  };
   /* Windy-style colour coding: each hour's fill/stroke colour comes from
      its own knot value read against the same scale the map field uses
      (WIND_STOPS/CURRENT_STOPS - see buildFieldImage above), blended into
@@ -1181,6 +1261,7 @@ function renderTimelineGraph() {
   if (state.tlPage === 'current') {
     const cur = tlData.cur.map(v => v == null ? 0 : v / 1.852);
     const maxV = Math.max(1, ...cur) * 1.15;
+    drawRefLines(maxV, 'kn');
     gradientArea(cur, cur, maxV, CURRENT_STOPS, 0.42, 0.95);
   } else {
     const toKn = v => state.spd === 'kn' ? v : v / 1.852;
@@ -1188,6 +1269,7 @@ function renderTimelineGraph() {
     const vals = tlData[metric].map(v => v == null ? 0 : v);
     const kts = vals.map(toKn);
     const maxV = Math.max(state.spd === 'kn' ? 10 : 18, ...vals) * 1.15;
+    drawRefLines(maxV, state.spd === 'kn' ? 'kn' : 'km/h');
     gradientArea(vals, kts, maxV, WIND_STOPS, 0.42, 0.95);
   }
   // hour ticks
@@ -1606,6 +1688,10 @@ $$('#windMetricSeg button').forEach(b => b.addEventListener('click', () => {
   state.windMetric = b.dataset.wm; store.set('windMetric', state.windMetric);
   paintWindMetricSeg();
   renderTimelineGraph();
+  // the map field itself needs to switch too, not just the timeline graph -
+  // WindLayer keeps both wind and gust values cached from the last fetch, so
+  // this just re-picks which one colours the field rather than refetching
+  if (windLayer) windLayer.refresh();
 }));
 
 /* timeline scrubber - cheap redraw on every drag tick, layer refetch debounced */
