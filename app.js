@@ -482,13 +482,11 @@ function fieldGrid(N, b) {
   }
   return pts;
 }
-function drawField(canvas, m, dpr, grid, N, kind) {
-  const g = canvas.getContext('2d');
-  dpr = dpr || 1;
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
-  const size = m.getSize();
-  g.clearRect(0, 0, size.x, size.y);
-  if (!grid) return;
+/* Builds the small NxN colour-field canvas for one fetched grid - cached
+   per fetch (see _load below) and reused every animation frame, so a frame
+   redraw is just one drawImage() plus the arrow loop, not a full rebuild. */
+function buildFieldImage(N, grid, kind) {
+  if (!grid) return null;
   const stops = kind === 'wind' ? WIND_STOPS : CURRENT_STOPS;
   const small = document.createElement('canvas'); small.width = N; small.height = N;
   const sg = small.getContext('2d');
@@ -500,26 +498,44 @@ function drawField(canvas, m, dpr, grid, N, kind) {
     img.data[o] = r; img.data[o + 1] = gg; img.data[o + 2] = b; img.data[o + 3] = 200;
   }
   sg.putImageData(img, 0, 0);
+  return small;
+}
+/* One animation frame: the cached field image scaled up, plus a dense grid
+   of direction arrows (one per sample point - no more skipping every other
+   row/col) with a flowing dashed stroke. phase drives the dash offset so
+   the dashes crawl along each arrow the way the wind/current is moving -
+   each arrow's offset is nudged by its grid position so they don't all
+   pulse in lockstep. */
+function drawFieldFrame(canvas, m, dpr, grid, fieldImg, N, kind, phase) {
+  const g = canvas.getContext('2d');
+  dpr = dpr || 1;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const size = m.getSize();
+  g.clearRect(0, 0, size.x, size.y);
+  if (!grid || !fieldImg) return;
   g.imageSmoothingEnabled = true;
   if ('imageSmoothingQuality' in g) g.imageSmoothingQuality = 'high';
-  g.drawImage(small, 0, 0, N, N, 0, 0, size.x, size.y);
+  g.drawImage(fieldImg, 0, 0, N, N, 0, 0, size.x, size.y);
   if (!state.showArrows) return;
-  g.globalAlpha = 0.85;
-  const step = 2;   // sparse - the field carries magnitude, arrows are direction-only
-  for (let i = 0; i < N; i += step) {
-    for (let j = 0; j < N; j += step) {
+  g.globalAlpha = 0.9;
+  g.lineCap = 'round';
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
       const p = grid[i * N + j];
       if (!p) continue;
       const c = m.latLngToContainerPoint([p.lat, p.lon]);
       // wind_direction_10m is where the wind is FROM; ocean_current_direction is where it's heading
       const a = ((kind === 'wind' ? p.dir + 180 : p.dir) - 90) * Math.PI / 180;
-      const dx = Math.cos(a), dy = Math.sin(a), len = 15;
+      const dx = Math.cos(a), dy = Math.sin(a), len = 11;
       const x0 = c.x - dx * len / 2, y0 = c.y - dy * len / 2;
       const x1 = c.x + dx * len / 2, y1 = c.y + dy * len / 2;
       g.strokeStyle = 'rgba(255,255,255,.85)'; g.fillStyle = 'rgba(255,255,255,.85)';
-      g.lineWidth = 1.6; g.lineCap = 'round';
+      g.lineWidth = 1.4;
+      g.setLineDash([2, 3]);
+      g.lineDashOffset = -((phase * 0.4 + ((i * 7 + j * 13) % 5)) % 5);
       g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      const hl = 4.5, ha = 0.45;
+      g.setLineDash([]);
+      const hl = 3.6, ha = 0.45;
       g.beginPath();
       g.moveTo(x1, y1);
       g.lineTo(x1 - hl * Math.cos(a - ha), y1 - hl * Math.sin(a - ha));
@@ -529,21 +545,30 @@ function drawField(canvas, m, dpr, grid, N, kind) {
   }
   g.globalAlpha = 1;
 }
-/* Grid-sampled surface current, rendered as a coloured field. This is the
-   broad-scale model current, not the tidal stream - see the note in the drawer. */
-const CurrentLayer = L.Layer.extend({
+/* Shared behaviour for the two field layers - fetch/redraw stays per-class
+   (different API, different unit handling) but the canvas lifecycle and the
+   animation loop are identical, so they're mixed in via Object.assign
+   rather than duplicated. Redrawing is decoupled from fetching: _load()
+   only refreshes this._grid/_fieldImg, and a throttled requestAnimationFrame
+   loop repaints from whatever's cached every ~18fps, which is what drives
+   the flowing arrows even when the data itself hasn't changed. */
+const FieldLayerBase = {
   onAdd(map) {
     this._map = map;
-    this._canvas = L.DomUtil.create('canvas', 'bw-cur');
+    this._canvas = L.DomUtil.create('canvas', this._cls);
     this._canvas.style.position = 'absolute';
     map.getPane('cur').appendChild(this._canvas);
     map.on('moveend zoomend resize', this._reset, this);
+    this._phase = 0;
     this._reset();
+    this._animTick();
   },
   onRemove(map) {
     map.off('moveend zoomend resize', this._reset, this);
+    if (this._raf) cancelAnimationFrame(this._raf);
+    this._raf = null;
     L.DomUtil.remove(this._canvas);
-    this._grid = null;
+    this._grid = null; this._fieldImg = null;
   },
   _reset() {
     const m = this._map, size = m.getSize();
@@ -555,13 +580,27 @@ const CurrentLayer = L.Layer.extend({
     this._dpr = dpr;
     this._load();
   },
+  _animTick(t) {
+    if (t == null || !this._lastT || t - this._lastT > 55) {
+      this._lastT = t;
+      this._phase = (this._phase + 1) % 100000;
+      drawFieldFrame(this._canvas, this._map, this._dpr, this._grid, this._fieldImg, FIELD_N, this._kind, this._phase);
+    }
+    this._raf = requestAnimationFrame(ts => this._animTick(ts));
+  },
+  refresh() { this._load(); }
+};
+/* Grid-sampled surface current, rendered as a coloured field. This is the
+   broad-scale model current, not the tidal stream - see the note in the drawer. */
+const CurrentLayer = L.Layer.extend(Object.assign({}, FieldLayerBase, {
+  _cls: 'bw-cur', _kind: 'current',
   async _load() {
     const N = FIELD_N;
     const pts = fieldGrid(N, this._map.getBounds());
     const target = tlTargetTime();
     const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + target;
-    if (!target) { this._grid = null; this._draw(); return; }
-    if (key === this._key && this._grid) { this._draw(); return; }
+    if (!target) { this._grid = null; this._fieldImg = null; return; }
+    if (key === this._key && this._grid) return;
     this._key = key;
     try {
       const grid = new Array(N * N).fill(null);
@@ -585,52 +624,26 @@ const CurrentLayer = L.Layer.extend({
         });
       }
       this._grid = grid;
-      this._draw();
+      this._fieldImg = buildFieldImage(N, grid, 'current');
     } catch {
-      this._grid = null;
-      this._draw();
+      this._grid = null; this._fieldImg = null;
     }
-  },
-  refresh() { this._load(); },
-  _draw() { drawField(this._canvas, this._map, this._dpr, this._grid, FIELD_N, 'current'); }
-});
+  }
+}));
 let currentLayer = null;
 
 /* Same grid-and-field approach, sampling forecast wind speed/direction.
    Always fetched in true knots regardless of the display unit, so the
-   field colour and legend stay correct however Settings has units set -
-   the unit only affects the legend's printed numbers. */
-const WindLayer = L.Layer.extend({
-  onAdd(map) {
-    this._map = map;
-    this._canvas = L.DomUtil.create('canvas', 'bw-wind');
-    this._canvas.style.position = 'absolute';
-    map.getPane('cur').appendChild(this._canvas);
-    map.on('moveend zoomend resize', this._reset, this);
-    this._reset();
-  },
-  onRemove(map) {
-    map.off('moveend zoomend resize', this._reset, this);
-    L.DomUtil.remove(this._canvas);
-    this._grid = null;
-  },
-  _reset() {
-    const m = this._map, size = m.getSize();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    L.DomUtil.setPosition(this._canvas, m.containerPointToLayerPoint([0, 0]));
-    this._canvas.width = size.x * dpr; this._canvas.height = size.y * dpr;
-    this._canvas.style.width = size.x + 'px';
-    this._canvas.style.height = size.y + 'px';
-    this._dpr = dpr;
-    this._load();
-  },
+   field colour stays correct however Settings has units set. */
+const WindLayer = L.Layer.extend(Object.assign({}, FieldLayerBase, {
+  _cls: 'bw-wind', _kind: 'wind',
   async _load() {
     const N = FIELD_N;
     const pts = fieldGrid(N, this._map.getBounds());
     const target = tlTargetTime();
     const key = pts.map(p => p.lat.toFixed(2) + ',' + p.lon.toFixed(2)).join('|') + '@' + target;
-    if (!target) { this._grid = null; this._draw(); return; }
-    if (key === this._key && this._grid) { this._draw(); return; }
+    if (!target) { this._grid = null; this._fieldImg = null; return; }
+    if (key === this._key && this._grid) return;
     this._key = key;
     try {
       const grid = new Array(N * N).fill(null);
@@ -655,43 +668,32 @@ const WindLayer = L.Layer.extend({
         });
       }
       this._grid = grid;
-      this._draw();
+      this._fieldImg = buildFieldImage(N, grid, 'wind');
     } catch {
-      this._grid = null;
-      this._draw();
+      this._grid = null; this._fieldImg = null;
     }
-  },
-  refresh() { this._load(); },
-  _draw() { drawField(this._canvas, this._map, this._dpr, this._grid, FIELD_N, 'wind'); }
-});
+  }
+}));
 let windLayer = null;
 
-/* Gradient legend for whichever field is showing - same look as the
-   SST/Chl/Anom legend (.lg-title/.lg-bar/.lg-ends), swapped in when the
-   map view isn't 'sat'. Wind's stops are true knots; convert to km/h for
-   the printed numbers only when that's the chosen display unit. */
-function paintFieldLegend(kind) {
-  const stops = kind === 'wind' ? WIND_STOPS : CURRENT_STOPS;
-  const lo = stops[0].v, hi = stops[stops.length - 1].v;
-  const grad = stops.map(s => 'rgb(' + s.rgb.join(',') + ') ' + (((s.v - lo) / (hi - lo)) * 100).toFixed(1) + '%').join(',');
-  const toDisplay = v => (kind === 'wind' && state.spd !== 'kn') ? v * 1.852 : v;
-  const unit = kind === 'wind' ? (state.spd === 'kn' ? 'kn' : 'km/h') : 'kn';
-  const title = kind === 'wind' ? 'Wind speed' : 'Surface current';
-  const el = $('#legend');
-  el.classList.remove('hidden');
-  el.innerHTML =
-    '<div class="lg-title">' + title + '</div>' +
-    '<div class="lg-bar" style="background:linear-gradient(90deg,' + grad + ')"></div>' +
-    '<div class="lg-ends"><span>' + Math.round(toDisplay(lo)) + '</span><span>' + unit + '</span><span>' + Math.round(toDisplay(hi)) + '+</span></div>';
-}
+/* The colour-scale key is removed for every layer - satellite and field
+   alike. Left as a no-op (rather than pulled out at every call site) so
+   nothing else needs to change; #legend itself is gone from the page. */
+function paintFieldLegend() {}
 
 function paintWcSeg() {
   $$('#wcSeg button').forEach(b => b.classList.toggle('on', b.dataset.wc === state.mapView));
 }
+function updateTlTitle() {
+  const el = $('#tlTitle'); if (el) el.textContent = state.tlPage === 'current' ? 'Current' : 'Wind';
+}
 /* The single switch between the satellite layer and a full-page wind/current
    field - mutually exclusive, one tap, same pattern as SST/Chl/Anom. Leaving
    'sat' hides the imagery + break-finder panes (without discarding them);
-   coming back re-shows them rather than refetching. */
+   coming back re-shows them rather than refetching. On the field views the
+   land basemap is pulled above the coloured field (dropping the field pane
+   below the tile pane) and dimmed rather than fully opaque, so the coast is
+   readable without blotting out the water the field is actually showing. */
 function setMapView(view) {
   state.mapView = view; store.set('mapView', view);
   paintWcSeg();
@@ -699,12 +701,15 @@ function setMapView(view) {
   if (view === 'sat') {
     if (windLayer) { map.removeLayer(windLayer); windLayer = null; }
     if (currentLayer) { map.removeLayer(currentLayer); currentLayer = null; }
+    map.getPane('cur').style.zIndex = 430;
+    bathy.setOpacity(1);
     if (dataLayer && !map.hasLayer(dataLayer)) dataLayer.addTo(map);
     if (breakLayer && !map.hasLayer(breakLayer)) breakLayer.addTo(map);
-    paintLegend();
   } else {
     if (dataLayer && map.hasLayer(dataLayer)) map.removeLayer(dataLayer);
     if (breakLayer && map.hasLayer(breakLayer)) map.removeLayer(breakLayer);
+    map.getPane('cur').style.zIndex = 150;   // below the tile pane (200) - land renders on top
+    bathy.setOpacity(0.55);
     if (view === 'wind') {
       if (currentLayer) { map.removeLayer(currentLayer); currentLayer = null; }
       if (!windLayer) { windLayer = new WindLayer(); windLayer.addTo(map); }
@@ -712,7 +717,6 @@ function setMapView(view) {
       if (windLayer) { map.removeLayer(windLayer); windLayer = null; }
       if (!currentLayer) { currentLayer = new CurrentLayer(); currentLayer.addTo(map); }
     }
-    paintFieldLegend(view);
   }
 }
 /* Tapping Wind/Current up top picks which forecast the timeline graph
@@ -720,6 +724,7 @@ function setMapView(view) {
 function setTlPage(page) {
   state.tlPage = page; store.set('tlPage', page);
   setMapView(page);
+  updateTlTitle();
   renderTimelineGraph();
   updateTlValue();
 }
@@ -822,21 +827,10 @@ function paintDate() {
 }
 
 /* ------------------------------ legend ------------------------------ */
-async function paintLegend() {
-  const L_ = LAYERS[state.layer];
-  let cm;
-  try { cm = await loadColorMap(L_.cmap); } catch { $('#legend').classList.add('hidden'); return; }
-  const stops = cm.stops.filter(s => isFinite(s.v));
-  if (!stops.length) return;
-  const lo = stops[0].v, hi = stops[stops.length - 1].v;
-  const grad = stops.filter((_, i) => i % 4 === 0 || i === stops.length - 1)
-    .map(s => s.rgb + ' ' + (((s.v - lo) / (hi - lo)) * 100).toFixed(1) + '%').join(',');
-  $('#legend').classList.remove('hidden');
-  $('#legend').innerHTML =
-    '<div class="lg-title">' + L_.full + '</div>' +
-    '<div class="lg-bar" style="background:linear-gradient(90deg,' + grad + ')"></div>' +
-    '<div class="lg-ends"><span>' + L_.fmt(lo) + '</span><span>' + L_.unit + '</span><span>' + L_.fmt(hi) + '</span></div>';
-}
+/* The colour-scale key is removed for every layer, satellite included - see
+   the matching paintFieldLegend() no-op above. Left in place as a no-op
+   rather than pulled out at every call site. */
+function paintLegend() {}
 
 /* ------------------------------- GPS -------------------------------- */
 let boatMarker = null, accCircle = null, following = false, watchId = null;
@@ -1732,6 +1726,7 @@ window.addEventListener('offline', () => toast('Offline. Using saved maps.', 320
   paintLegend();
   refreshBreaks(false);
   setMapView(state.mapView);
+  updateTlTitle();
   const c = map.getCenter();
   loadConditions(c.lat, c.lng);
   loadTide(c.lat, c.lng);

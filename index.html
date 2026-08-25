@@ -131,16 +131,18 @@
       <button id="tlNextDay" class="tl-daybtn" aria-label="Next day">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>
       </button>
-      <span class="spacer"></span>
+      <span id="tlTitle" class="tl-title">Wind</span>
       <span id="tlTime" class="tl-time">&mdash;</span>
       <button id="tlNow" class="tl-nowbtn">Now</button>
     </div>
-    <div class="tl-graphwrap">
-      <canvas id="tlGraph" height="46"></canvas>
-      <div id="tlNowMark" class="tl-nowmark hidden"></div>
-      <div id="tlHead" class="tl-playhead"></div>
+    <div class="tl-scrub" id="tlScrub">
+      <div class="tl-graphwrap">
+        <canvas id="tlGraph" height="46"></canvas>
+        <div id="tlNowMark" class="tl-nowmark hidden"></div>
+        <div id="tlHead" class="tl-playhead"></div>
+      </div>
+      <input type="range" id="tlSlider" class="tl-slider" min="0" max="23" value="0" step="1" aria-label="Hour of day">
     </div>
-    <input type="range" id="tlSlider" class="tl-slider" min="0" max="23" value="0" step="1" aria-label="Hour of day">
     <div id="tlValue" class="tl-value">&mdash;</div>
   </div>
 </div>
@@ -165,8 +167,6 @@
   </button>
 </div>
 
-<!-- legend -->
-<div id="legend" class="legend"></div>
 
 <!-- settings -->
 <div id="menu" class="drawer hidden">

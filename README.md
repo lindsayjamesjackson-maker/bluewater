@@ -106,25 +106,28 @@ get retrieved and get moved. The app links to the official listing from Settings
 ### Wind and current — full map pages
 
 Tap **Wind** or **Current** up top and the map itself switches to that forecast —
-a smooth coloured field across the whole screen, with its own scale bottom-left, the
-same way SST, chlorophyll and anomaly work. It replaces the satellite layer rather
-than sitting on top of it, so there's one thing on screen at a time instead of arrows
-crowded over imagery. A sparse set of white arrows sits over the field for direction;
+a smooth coloured field across the whole screen, the same way SST, chlorophyll and
+anomaly work. It replaces the satellite layer rather than sitting on top of it, so
+there's one thing on screen at a time. The coast and land stay visible on top of the
+field rather than getting painted over, dimmed a little so the colour underneath still
+reads. A dense, animated set of white arrows flows over the field for direction;
 colour carries the speed. Tap SST, Chl or Anom to go back to the satellite view —
 whichever forecast you last had showing stays remembered for next time you tap
 Wind or Current again.
 
-Underneath, a Windy-style scrubber shows the same forecast as a graph, one at a time:
-speed and gusts as two overlaid filled lines on the Wind page, a single line for
-Current, over day/night shading, with the values for wherever you've dragged to
-printed underneath.
+Underneath, a Windy-style scrubber shows the same forecast as a graph, one at a time —
+its label sits between the day and the time so it's always clear which one you're
+looking at. On the Wind page, speed and gusts are drawn as two overlaid filled lines;
+Current gets a single line; both over day/night shading, with the values for wherever
+you've dragged to printed underneath. Drag anywhere across the graph itself, not just
+underneath it, to scrub.
 
-Drag the dot and the Conditions cards, the value line, and the field on the map all
-update to that hour — the field redraws after a short pause so it isn't refetching on
-every pixel of drag. The arrows either side of **Today** step the whole timeline to
-another day, past or forecast — Open-Meteo keeps a few days of recent history and
-forecasts about ten days out, and the day arrows stop at either end of that. **Now**
-snaps straight back to today at the current hour.
+Dragging updates the Conditions cards, the value line, and the field on the map all to
+that hour — the field redraws after a short pause so it isn't refetching on every
+pixel of drag. The arrows either side of **Today** step the whole timeline to another
+day, past or forecast — Open-Meteo keeps a few days of recent history and forecasts
+about ten days out, and the day arrows stop at either end of that. **Now** snaps
+straight back to today at the current hour.
 
 Both fields are grid-sampled over the visible area. Wind is a standard forecast model
 and does change meaningfully hour to hour — that's the point of the slider. Current
