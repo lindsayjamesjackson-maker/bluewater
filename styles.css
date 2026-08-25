@@ -24,6 +24,8 @@ button{font:inherit;color:inherit;background:none;border:0;cursor:pointer}
 .seg button{padding:7px 15px;border-radius:999px;font-size:13.5px;font-weight:650;color:var(--dim);
   line-height:1;white-space:nowrap}
 .seg button.on{background:var(--acc);color:#04121e}
+.seg.small{padding:2px}
+.seg.small button{padding:5px 12px;font-size:12px}
 .chip.small{padding:6px 12px;font-size:13px}
 
 /* day stepper */

@@ -110,17 +110,24 @@ a smooth coloured field across the whole screen, the same way SST, chlorophyll a
 anomaly work. It replaces the satellite layer rather than sitting on top of it, so
 there's one thing on screen at a time. The coast and land stay visible on top of the
 field rather than getting painted over, dimmed a little so the colour underneath still
-reads. A dense, animated set of white arrows flows over the field for direction;
-colour carries the speed. Tap SST, Chl or Anom to go back to the satellite view —
+reads. A dense, animated set of white arrows flows over the top of everything —
+land included — for direction, with a dark outline so they stay readable over pale
+water and pale coastline alike; colour carries the speed. Tap SST, Chl or Anom to go
+back to the satellite view —
 whichever forecast you last had showing stays remembered for next time you tap
 Wind or Current again.
 
-Underneath, a Windy-style scrubber shows the same forecast as a graph, one at a time —
-its label sits between the day and the time so it's always clear which one you're
-looking at. On the Wind page, speed and gusts are drawn as two overlaid filled lines;
-Current gets a single line; both over day/night shading, with the values for wherever
-you've dragged to printed underneath. Drag anywhere across the graph itself, not just
-underneath it, to scrub.
+Underneath, a Windy-style scrubber shows the same forecast as a graph, one line at a
+time — its label sits between the day and the time so it's always clear which one
+you're looking at. The line itself is colour-coded the same way the field on the map
+is: calm reads blue, a stiff sea-breeze reads green through orange, so you can read
+the strength of the day at a glance before you even drag it, over day/night shading,
+with the values for wherever you've dragged to printed underneath. Drag anywhere
+across the graph itself, not just underneath it, to scrub.
+
+On the Wind page a second, smaller selector appears under the Wind/Current buttons —
+**Wind** or **Gusts** — for which one the graph and its colour are showing. Current
+only ever has the one line, so it stays out of the way there.
 
 Dragging updates the Conditions cards, the value line, and the field on the map all to
 that hour — the field redraws after a short pause so it isn't refetching on every

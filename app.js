@@ -163,6 +163,12 @@ map.createPane('breaks'); map.getPane('breaks').style.zIndex = 400;
 map.getPane('breaks').style.pointerEvents = 'none';
 map.createPane('cur'); map.getPane('cur').style.zIndex = 430;
 map.getPane('cur').style.pointerEvents = 'none';
+/* the wind/current arrows get their own pane, always above the tile pane
+   (200) - unlike the colour field, which drops below it in wind/current
+   view so the land can sit on top, the arrows need to stay fully readable
+   even over the dimmed land, so they don't get muted along with it */
+map.createPane('arrows'); map.getPane('arrows').style.zIndex = 390;
+map.getPane('arrows').style.pointerEvents = 'none';
 
 /* ------------------------ data (imagery) layer ---------------------- */
 const state = {
@@ -183,6 +189,7 @@ const state = {
   tlIdx: null,   // hour-of-day (0-23) selected on the timeline; null = "not computed yet"
   tlDay: 0,      // days from today the timeline is showing (0 = today)
   tlPage: store.get('tlPage', 'wind'),  // which graph the timeline shows: 'wind' | 'current'
+  windMetric: store.get('windMetric', 'wind'),  // on the wind page, which line is graphed: 'wind' | 'gust'
   tideDay: 0     // days from today the Tide tab is showing
 };
 /* hourly wind + current + sea state for one calendar day at the focus point,
@@ -440,7 +447,7 @@ function setFads(on) {
    neutral set of direction arrows on top. Colour now carries magnitude,
    so the arrows don't need to - which also sidesteps the old per-arrow
    colour buckets that broke when the display unit was km/h. */
-const FIELD_N = 8;
+const FIELD_N = 10;
 const WIND_STOPS = [
   { v: 0, rgb: [46, 74, 102] },
   { v: 5, rgb: [53, 130, 165] },
@@ -500,25 +507,32 @@ function buildFieldImage(N, grid, kind) {
   sg.putImageData(img, 0, 0);
   return small;
 }
-/* One animation frame: the cached field image scaled up, plus a dense grid
-   of direction arrows (one per sample point - no more skipping every other
-   row/col) with a flowing dashed stroke. phase drives the dash offset so
-   the dashes crawl along each arrow the way the wind/current is moving -
-   each arrow's offset is nudged by its grid position so they don't all
-   pulse in lockstep. */
-function drawFieldFrame(canvas, m, dpr, grid, fieldImg, N, kind, phase) {
-  const g = canvas.getContext('2d');
+/* One animation frame. The field goes on its own canvas, sat in the 'cur'
+   pane, which in wind/current view sits BELOW the basemap tile pane so the
+   land can render on top of it (dimmed, not painted over - see setMapView).
+   The arrows go on a second canvas in the 'arrows' pane instead, which
+   stays above the tile pane always, so the direction arrows read clearly
+   over the dimmed land rather than getting muted along with the field
+   underneath it. Dense - one arrow per sample point - with a flowing
+   dashed stroke: phase drives the dash offset so the dashes crawl along
+   each arrow the way the wind/current is moving, and each arrow's offset
+   is nudged by its grid position so they don't all pulse in lockstep. */
+function drawFieldFrame(fieldCanvas, arrowCanvas, m, dpr, grid, fieldImg, N, kind, phase) {
   dpr = dpr || 1;
-  g.setTransform(dpr, 0, 0, dpr, 0, 0);
   const size = m.getSize();
-  g.clearRect(0, 0, size.x, size.y);
+  const fg = fieldCanvas.getContext('2d');
+  fg.setTransform(dpr, 0, 0, dpr, 0, 0);
+  fg.clearRect(0, 0, size.x, size.y);
+  const ag = arrowCanvas.getContext('2d');
+  ag.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ag.clearRect(0, 0, size.x, size.y);
   if (!grid || !fieldImg) return;
-  g.imageSmoothingEnabled = true;
-  if ('imageSmoothingQuality' in g) g.imageSmoothingQuality = 'high';
-  g.drawImage(fieldImg, 0, 0, N, N, 0, 0, size.x, size.y);
+  fg.imageSmoothingEnabled = true;
+  if ('imageSmoothingQuality' in fg) fg.imageSmoothingQuality = 'high';
+  fg.drawImage(fieldImg, 0, 0, N, N, 0, 0, size.x, size.y);
   if (!state.showArrows) return;
-  g.globalAlpha = 0.9;
-  g.lineCap = 'round';
+  ag.globalAlpha = 0.95;
+  ag.lineCap = 'round';
   for (let i = 0; i < N; i++) {
     for (let j = 0; j < N; j++) {
       const p = grid[i * N + j];
@@ -526,24 +540,29 @@ function drawFieldFrame(canvas, m, dpr, grid, fieldImg, N, kind, phase) {
       const c = m.latLngToContainerPoint([p.lat, p.lon]);
       // wind_direction_10m is where the wind is FROM; ocean_current_direction is where it's heading
       const a = ((kind === 'wind' ? p.dir + 180 : p.dir) - 90) * Math.PI / 180;
-      const dx = Math.cos(a), dy = Math.sin(a), len = 11;
+      const dx = Math.cos(a), dy = Math.sin(a), len = 13;
       const x0 = c.x - dx * len / 2, y0 = c.y - dy * len / 2;
       const x1 = c.x + dx * len / 2, y1 = c.y + dy * len / 2;
-      g.strokeStyle = 'rgba(255,255,255,.85)'; g.fillStyle = 'rgba(255,255,255,.85)';
-      g.lineWidth = 1.4;
-      g.setLineDash([2, 3]);
-      g.lineDashOffset = -((phase * 0.4 + ((i * 7 + j * 13) % 5)) % 5);
-      g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke();
-      g.setLineDash([]);
-      const hl = 3.6, ha = 0.45;
-      g.beginPath();
-      g.moveTo(x1, y1);
-      g.lineTo(x1 - hl * Math.cos(a - ha), y1 - hl * Math.sin(a - ha));
-      g.lineTo(x1 - hl * Math.cos(a + ha), y1 - hl * Math.sin(a + ha));
-      g.closePath(); g.fill();
+      const hl = 4, ha = 0.45;
+      const hx1 = x1 - hl * Math.cos(a - ha), hy1 = y1 - hl * Math.sin(a - ha);
+      const hx2 = x1 - hl * Math.cos(a + ha), hy2 = y1 - hl * Math.sin(a + ha);
+      // a dark halo drawn first so the white arrow still reads against
+      // pale water and land alike, not just the colour field
+      ag.setLineDash([]);
+      ag.strokeStyle = 'rgba(4,18,30,.6)'; ag.lineWidth = 2.8;
+      ag.beginPath(); ag.moveTo(x0, y0); ag.lineTo(x1, y1); ag.stroke();
+      ag.fillStyle = 'rgba(4,18,30,.6)';
+      ag.beginPath(); ag.moveTo(x1, y1); ag.lineTo(hx1, hy1); ag.lineTo(hx2, hy2); ag.closePath(); ag.fill();
+      ag.strokeStyle = 'rgba(255,255,255,.95)'; ag.fillStyle = 'rgba(255,255,255,.95)';
+      ag.lineWidth = 1.4;
+      ag.setLineDash([2, 3]);
+      ag.lineDashOffset = -((phase * 0.4 + ((i * 7 + j * 13) % 5)) % 5);
+      ag.beginPath(); ag.moveTo(x0, y0); ag.lineTo(x1, y1); ag.stroke();
+      ag.setLineDash([]);
+      ag.beginPath(); ag.moveTo(x1, y1); ag.lineTo(hx1, hy1); ag.lineTo(hx2, hy2); ag.closePath(); ag.fill();
     }
   }
-  g.globalAlpha = 1;
+  ag.globalAlpha = 1;
 }
 /* Shared behaviour for the two field layers - fetch/redraw stays per-class
    (different API, different unit handling) but the canvas lifecycle and the
@@ -558,6 +577,12 @@ const FieldLayerBase = {
     this._canvas = L.DomUtil.create('canvas', this._cls);
     this._canvas.style.position = 'absolute';
     map.getPane('cur').appendChild(this._canvas);
+    // the arrows live on a separate canvas, in the 'arrows' pane above the
+    // basemap tiles, so they stay crisp even where the field beneath them
+    // is dimmed under the land (see setMapView / the 'arrows' pane above)
+    this._arrowCanvas = L.DomUtil.create('canvas', this._cls + '-arrows');
+    this._arrowCanvas.style.position = 'absolute';
+    map.getPane('arrows').appendChild(this._arrowCanvas);
     map.on('moveend zoomend resize', this._reset, this);
     this._phase = 0;
     this._reset();
@@ -568,15 +593,19 @@ const FieldLayerBase = {
     if (this._raf) cancelAnimationFrame(this._raf);
     this._raf = null;
     L.DomUtil.remove(this._canvas);
+    L.DomUtil.remove(this._arrowCanvas);
     this._grid = null; this._fieldImg = null;
   },
   _reset() {
     const m = this._map, size = m.getSize();
     const dpr = Math.min(2, window.devicePixelRatio || 1);
-    L.DomUtil.setPosition(this._canvas, m.containerPointToLayerPoint([0, 0]));
-    this._canvas.width = size.x * dpr; this._canvas.height = size.y * dpr;
-    this._canvas.style.width = size.x + 'px';
-    this._canvas.style.height = size.y + 'px';
+    const pt = m.containerPointToLayerPoint([0, 0]);
+    [this._canvas, this._arrowCanvas].forEach(cv => {
+      L.DomUtil.setPosition(cv, pt);
+      cv.width = size.x * dpr; cv.height = size.y * dpr;
+      cv.style.width = size.x + 'px';
+      cv.style.height = size.y + 'px';
+    });
     this._dpr = dpr;
     this._load();
   },
@@ -584,7 +613,7 @@ const FieldLayerBase = {
     if (t == null || !this._lastT || t - this._lastT > 55) {
       this._lastT = t;
       this._phase = (this._phase + 1) % 100000;
-      drawFieldFrame(this._canvas, this._map, this._dpr, this._grid, this._fieldImg, FIELD_N, this._kind, this._phase);
+      drawFieldFrame(this._canvas, this._arrowCanvas, this._map, this._dpr, this._grid, this._fieldImg, FIELD_N, this._kind, this._phase);
     }
     this._raf = requestAnimationFrame(ts => this._animTick(ts));
   },
@@ -683,6 +712,12 @@ function paintFieldLegend() {}
 
 function paintWcSeg() {
   $$('#wcSeg button').forEach(b => b.classList.toggle('on', b.dataset.wc === state.mapView));
+  const row = $('#windMetricRow'); if (row) row.classList.toggle('hidden', state.mapView !== 'wind');
+}
+/* the Wind/Gusts toggle only matters on the wind page - it picks which
+   single line the timeline graphs, colour-coded (see renderTimelineGraph) */
+function paintWindMetricSeg() {
+  $$('#windMetricSeg button').forEach(b => b.classList.toggle('on', b.dataset.wm === state.windMetric));
 }
 function updateTlTitle() {
   const el = $('#tlTitle'); if (el) el.textContent = state.tlPage === 'current' ? 'Current' : 'Wind';
@@ -1075,25 +1110,43 @@ function renderTimelineGraph() {
     if (night) { g.fillStyle = 'rgba(0,0,0,.16)'; g.fillRect(i * bw, 0, bw + 0.5, h); }
   });
   const X = i => i * bw + bw / 2;
-  const area = (vals, maxV, fillStyle, strokeStyle) => {
+  /* Windy-style colour coding: each hour's fill/stroke colour comes from
+     its own knot value read against the same scale the map field uses
+     (WIND_STOPS/CURRENT_STOPS - see buildFieldImage above), blended into
+     a horizontal gradient across the hours rather than one flat colour,
+     so a calm morning reads blue and a stiff sea-breeze reads green/
+     orange, matching the field on the map. */
+  const gradientArea = (vals, kts, maxV, stops, fillA, strokeA) => {
+    const fillGrad = g.createLinearGradient(0, 0, w, 0);
+    const strokeGrad = g.createLinearGradient(0, 0, w, 0);
+    vals.forEach((v, i) => {
+      const [r, gg, b] = lerpColor(stops, kts[i]);
+      const frac = n > 1 ? i / (n - 1) : 0;
+      fillGrad.addColorStop(frac, 'rgba(' + r + ',' + gg + ',' + b + ',' + fillA + ')');
+      strokeGrad.addColorStop(frac, 'rgba(' + r + ',' + gg + ',' + b + ',' + strokeA + ')');
+    });
     g.beginPath();
     vals.forEach((v, i) => { const x = X(i), y = baseY - (Math.max(0, v || 0) / maxV) * (baseY - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
     g.lineTo(X(n - 1), baseY); g.lineTo(X(0), baseY); g.closePath();
-    g.fillStyle = fillStyle; g.fill();
+    g.fillStyle = fillGrad; g.fill();
     g.beginPath();
     vals.forEach((v, i) => { const x = X(i), y = baseY - (Math.max(0, v || 0) / maxV) * (baseY - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
-    g.strokeStyle = strokeStyle; g.lineWidth = 1.6; g.stroke();
+    g.strokeStyle = strokeGrad; g.lineWidth = 1.8; g.stroke();
   };
+  // the wind page graphs one line at a time now - Wind or Gusts, picked by
+  // #windMetricSeg - rather than two overlaid fills, so the colour-coding
+  // reads cleanly instead of blending two translucent layers together
   if (state.tlPage === 'current') {
     const cur = tlData.cur.map(v => v == null ? 0 : v / 1.852);
     const maxV = Math.max(1, ...cur) * 1.15;
-    area(cur, maxV, 'rgba(90,225,190,.32)', 'rgba(120,225,235,.9)');
+    gradientArea(cur, cur, maxV, CURRENT_STOPS, 0.42, 0.95);
   } else {
-    const gust = tlData.gust.map(v => v == null ? 0 : v);
-    const wind = tlData.wind.map(v => v == null ? 0 : v);
-    const maxV = Math.max(state.spd === 'kn' ? 10 : 18, ...gust) * 1.1;
-    area(gust, maxV, 'rgba(255,122,60,.22)', 'rgba(255,122,60,.55)');
-    area(wind, maxV, 'rgba(90,225,190,.38)', 'rgba(120,225,235,.95)');
+    const toKn = v => state.spd === 'kn' ? v : v / 1.852;
+    const metric = state.windMetric === 'gust' ? 'gust' : 'wind';
+    const vals = tlData[metric].map(v => v == null ? 0 : v);
+    const kts = vals.map(toKn);
+    const maxV = Math.max(state.spd === 'kn' ? 10 : 18, ...vals) * 1.15;
+    gradientArea(vals, kts, maxV, WIND_STOPS, 0.42, 0.95);
   }
   // hour ticks
   g.fillStyle = 'rgba(143,176,196,.85)'; g.font = '9px -apple-system,sans-serif'; g.textAlign = 'center';
@@ -1506,6 +1559,12 @@ $('#arrowsOn').addEventListener('change', e => {
 /* wind / current page selector, up in the top bar - picks which forecast
    the timeline graph shows AND switches the map to that full field view. */
 $$('#wcSeg button').forEach(b => b.addEventListener('click', () => setTlPage(b.dataset.wc)));
+$$('#windMetricSeg button').forEach(b => b.addEventListener('click', () => {
+  if (state.windMetric === b.dataset.wm) return;
+  state.windMetric = b.dataset.wm; store.set('windMetric', state.windMetric);
+  paintWindMetricSeg();
+  renderTimelineGraph();
+}));
 
 /* timeline scrubber - cheap redraw on every drag tick, layer refetch debounced */
 let tlDebounce = null;
@@ -1727,6 +1786,7 @@ window.addEventListener('offline', () => toast('Offline. Using saved maps.', 320
   refreshBreaks(false);
   setMapView(state.mapView);
   updateTlTitle();
+  paintWindMetricSeg();
   const c = map.getCenter();
   loadConditions(c.lat, c.lng);
   loadTide(c.lat, c.lng);
