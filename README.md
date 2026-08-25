@@ -109,11 +109,14 @@ Tap **Wind** or **Current** up top and the map itself switches to that forecast 
 a smooth coloured field across the whole screen, the same way SST, chlorophyll and
 anomaly work. It replaces the satellite layer rather than sitting on top of it, so
 there's one thing on screen at a time. The coast and land stay visible on top of the
-field rather than getting painted over, dimmed a little so the colour underneath still
-reads. A dense, animated set of white arrows flows over the top of everything —
-land included — for direction, with a dark outline so they stay readable over pale
-water and pale coastline alike; colour carries the speed. Tap SST, Chl or Anom to go
-back to the satellite view —
+field rather than getting painted over, turned right down so the colour underneath
+reads clearly — the coastline and place names stay marked regardless, from a
+reference layer that's never dimmed. A dense field of small streaks genuinely flows
+over the top of everything — land included — each one drifting in the direction of
+the wind or current at its speed, fading in and looping round rather than sitting
+still or just flickering in place, with a dark outline so they stay readable over
+pale water and pale coastline alike; colour carries the speed too. Tap SST, Chl or
+Anom to go back to the satellite view —
 whichever forecast you last had showing stays remembered for next time you tap
 Wind or Current again.
 

@@ -507,17 +507,33 @@ function buildFieldImage(N, grid, kind) {
   sg.putImageData(img, 0, 0);
   return small;
 }
+/* Direction is shown as flowing particles - short marks that actually
+   travel across the screen, in the true direction, at a speed that scales
+   with the local wind/current strength - rather than a static arrow with
+   a cosmetic animated dash (which read as "flashing" in place, not moving).
+   Each particle lives in screen space, one per PARTICLE_N, and looks up
+   its local vector from whichever field grid-cell it's currently sitting
+   over - the same NxN grid the colour field is built from, so a particle
+   drawn over a fast orange patch visibly outruns one over a slow blue
+   patch. A particle respawns at a random point once it drifts off-screen
+   or reaches the end of its randomised lifespan, fading in over its first
+   few frames so respawns don't pop. */
+const PARTICLE_N = 160;
+function initParticles(n, size) {
+  const arr = [];
+  for (let k = 0; k < n; k++) {
+    const x = Math.random() * size.x, y = Math.random() * size.y;
+    arr.push({ x, y, px: x, py: y, age: Math.floor(Math.random() * 90), life: 70 + Math.random() * 80 });
+  }
+  return arr;
+}
 /* One animation frame. The field goes on its own canvas, sat in the 'cur'
    pane, which in wind/current view sits BELOW the basemap tile pane so the
    land can render on top of it (dimmed, not painted over - see setMapView).
-   The arrows go on a second canvas in the 'arrows' pane instead, which
-   stays above the tile pane always, so the direction arrows read clearly
-   over the dimmed land rather than getting muted along with the field
-   underneath it. Dense - one arrow per sample point - with a flowing
-   dashed stroke: phase drives the dash offset so the dashes crawl along
-   each arrow the way the wind/current is moving, and each arrow's offset
-   is nudged by its grid position so they don't all pulse in lockstep. */
-function drawFieldFrame(fieldCanvas, arrowCanvas, m, dpr, grid, fieldImg, N, kind, phase) {
+   The particles go on a second canvas in the 'arrows' pane instead, which
+   stays above the tile pane always, so they read clearly over the dimmed
+   land rather than getting muted along with the field underneath it. */
+function drawFieldFrame(fieldCanvas, arrowCanvas, m, dpr, grid, fieldImg, N, kind, particles) {
   dpr = dpr || 1;
   const size = m.getSize();
   const fg = fieldCanvas.getContext('2d');
@@ -530,39 +546,47 @@ function drawFieldFrame(fieldCanvas, arrowCanvas, m, dpr, grid, fieldImg, N, kin
   fg.imageSmoothingEnabled = true;
   if ('imageSmoothingQuality' in fg) fg.imageSmoothingQuality = 'high';
   fg.drawImage(fieldImg, 0, 0, N, N, 0, 0, size.x, size.y);
-  if (!state.showArrows) return;
-  ag.globalAlpha = 0.95;
+  if (!state.showArrows || !particles) return;
   ag.lineCap = 'round';
-  for (let i = 0; i < N; i++) {
-    for (let j = 0; j < N; j++) {
-      const p = grid[i * N + j];
-      if (!p) continue;
-      const c = m.latLngToContainerPoint([p.lat, p.lon]);
-      // wind_direction_10m is where the wind is FROM; ocean_current_direction is where it's heading
-      const a = ((kind === 'wind' ? p.dir + 180 : p.dir) - 90) * Math.PI / 180;
-      const dx = Math.cos(a), dy = Math.sin(a), len = 13;
-      const x0 = c.x - dx * len / 2, y0 = c.y - dy * len / 2;
-      const x1 = c.x + dx * len / 2, y1 = c.y + dy * len / 2;
-      const hl = 4, ha = 0.45;
-      const hx1 = x1 - hl * Math.cos(a - ha), hy1 = y1 - hl * Math.sin(a - ha);
-      const hx2 = x1 - hl * Math.cos(a + ha), hy2 = y1 - hl * Math.sin(a + ha);
-      // a dark halo drawn first so the white arrow still reads against
-      // pale water and land alike, not just the colour field
-      ag.setLineDash([]);
-      ag.strokeStyle = 'rgba(4,18,30,.6)'; ag.lineWidth = 2.8;
-      ag.beginPath(); ag.moveTo(x0, y0); ag.lineTo(x1, y1); ag.stroke();
-      ag.fillStyle = 'rgba(4,18,30,.6)';
-      ag.beginPath(); ag.moveTo(x1, y1); ag.lineTo(hx1, hy1); ag.lineTo(hx2, hy2); ag.closePath(); ag.fill();
-      ag.strokeStyle = 'rgba(255,255,255,.95)'; ag.fillStyle = 'rgba(255,255,255,.95)';
-      ag.lineWidth = 1.4;
-      ag.setLineDash([2, 3]);
-      ag.lineDashOffset = -((phase * 0.4 + ((i * 7 + j * 13) % 5)) % 5);
-      ag.beginPath(); ag.moveTo(x0, y0); ag.lineTo(x1, y1); ag.stroke();
-      ag.setLineDash([]);
-      ag.beginPath(); ag.moveTo(x1, y1); ag.lineTo(hx1, hy1); ag.lineTo(hx2, hy2); ag.closePath(); ag.fill();
+  // current speeds are a fraction of wind speeds in knots - scale each
+  // kind against its own top colour-stop so both still visibly flow
+  const maxKn = kind === 'wind' ? 38 : 2.5;
+  for (const pt of particles) {
+    const j = Math.max(0, Math.min(N - 1, Math.floor(pt.x / size.x * N)));
+    const i = Math.max(0, Math.min(N - 1, Math.floor(pt.y / size.y * N)));
+    const cell = grid[i * N + j];
+    pt.age++;
+    if (!cell || pt.age > pt.life || pt.x < -5 || pt.x > size.x + 5 || pt.y < -5 || pt.y > size.y + 5) {
+      // respawn at a fresh random point - collapse the trail to zero length
+      // here so the next frame doesn't draw a streak clear across the screen
+      pt.x = Math.random() * size.x; pt.y = Math.random() * size.y;
+      pt.px = pt.x; pt.py = pt.y;
+      pt.age = 0; pt.life = 70 + Math.random() * 80;
+      continue;
     }
+    // wind_direction_10m is where the wind is FROM; ocean_current_direction is where it's heading
+    const a = ((kind === 'wind' ? cell.dir + 180 : cell.dir) - 90) * Math.PI / 180;
+    const speedFrac = Math.max(0, Math.min(1, cell.kn / maxKn));
+    const speedPx = 0.8 + speedFrac * 5.2; // screen px this particle advances per tick
+    pt.px = pt.x; pt.py = pt.y;
+    pt.x += Math.cos(a) * speedPx;
+    pt.y += Math.sin(a) * speedPx;
+    const alpha = 0.9 * Math.min(1, pt.age / 8);
+    if (alpha <= 0.02) continue;
+    const hl = 3.4, ha = 0.5;
+    const hx1 = pt.x - hl * Math.cos(a - ha), hy1 = pt.y - hl * Math.sin(a - ha);
+    const hx2 = pt.x - hl * Math.cos(a + ha), hy2 = pt.y - hl * Math.sin(a + ha);
+    // a dark halo drawn first so the white mark still reads against pale
+    // water and land alike, not just the colour field
+    ag.strokeStyle = 'rgba(4,18,30,' + (alpha * 0.65) + ')'; ag.lineWidth = 2.6;
+    ag.beginPath(); ag.moveTo(pt.px, pt.py); ag.lineTo(pt.x, pt.y); ag.stroke();
+    ag.fillStyle = 'rgba(4,18,30,' + (alpha * 0.65) + ')';
+    ag.beginPath(); ag.moveTo(pt.x, pt.y); ag.lineTo(hx1, hy1); ag.lineTo(hx2, hy2); ag.closePath(); ag.fill();
+    ag.strokeStyle = 'rgba(255,255,255,' + alpha + ')'; ag.lineWidth = 1.5;
+    ag.beginPath(); ag.moveTo(pt.px, pt.py); ag.lineTo(pt.x, pt.y); ag.stroke();
+    ag.fillStyle = 'rgba(255,255,255,' + alpha + ')';
+    ag.beginPath(); ag.moveTo(pt.x, pt.y); ag.lineTo(hx1, hy1); ag.lineTo(hx2, hy2); ag.closePath(); ag.fill();
   }
-  ag.globalAlpha = 1;
 }
 /* Shared behaviour for the two field layers - fetch/redraw stays per-class
    (different API, different unit handling) but the canvas lifecycle and the
@@ -584,7 +608,7 @@ const FieldLayerBase = {
     this._arrowCanvas.style.position = 'absolute';
     map.getPane('arrows').appendChild(this._arrowCanvas);
     map.on('moveend zoomend resize', this._reset, this);
-    this._phase = 0;
+    this._particles = null;
     this._reset();
     this._animTick();
   },
@@ -607,13 +631,16 @@ const FieldLayerBase = {
       cv.style.height = size.y + 'px';
     });
     this._dpr = dpr;
+    // particles live in screen-space, seeded once and left to keep flowing -
+    // a pan/zoom just repositions the pane as a whole (Leaflet's own CSS
+    // transform), so there's no need to reseed on every _reset() call
+    if (!this._particles) this._particles = initParticles(PARTICLE_N, size);
     this._load();
   },
   _animTick(t) {
     if (t == null || !this._lastT || t - this._lastT > 55) {
       this._lastT = t;
-      this._phase = (this._phase + 1) % 100000;
-      drawFieldFrame(this._canvas, this._arrowCanvas, this._map, this._dpr, this._grid, this._fieldImg, FIELD_N, this._kind, this._phase);
+      drawFieldFrame(this._canvas, this._arrowCanvas, this._map, this._dpr, this._grid, this._fieldImg, FIELD_N, this._kind, this._particles);
     }
     this._raf = requestAnimationFrame(ts => this._animTick(ts));
   },
@@ -744,7 +771,12 @@ function setMapView(view) {
     if (dataLayer && map.hasLayer(dataLayer)) map.removeLayer(dataLayer);
     if (breakLayer && map.hasLayer(breakLayer)) map.removeLayer(breakLayer);
     map.getPane('cur').style.zIndex = 150;   // below the tile pane (200) - land renders on top
-    bathy.setOpacity(0.55);
+    // the land fill itself goes very light here so the field colour is the
+    // thing that reads - the coastline stays marked regardless, because the
+    // reference layer (roads, rivers, place names) sits in its own pane
+    // above everything and is never dimmed, so it doubles as the coastline
+    // outline without needing a separate vector layer of our own
+    bathy.setOpacity(0.22);
     if (view === 'wind') {
       if (currentLayer) { map.removeLayer(currentLayer); currentLayer = null; }
       if (!windLayer) { windLayer = new WindLayer(); windLayer.addTo(map); }
@@ -1007,7 +1039,12 @@ function sliceTimelineDay() {
   const { w, m } = tlFull;
   const target = localDateStr(addDays(new Date(), state.tlDay));
   const idxs = []; w.hourly.time.forEach((t, i) => { if (t.slice(0, 10) === target) idxs.push(i); });
-  if (!idxs.length) { tlData = null; renderTimelineGraph(); syncTlDayNav(); return; }
+  if (!idxs.length) {
+    tlData = null; renderTimelineGraph(); syncTlDayNav();
+    if (currentLayer) currentLayer.refresh();
+    if (windLayer) windLayer.refresh();
+    return;
+  }
   const i0 = idxs[0], n = idxs.length;
   const mIdxs = []; m.hourly.time.forEach((t, i) => { if (t.slice(0, 10) === target) mIdxs.push(i); });
   const j0 = mIdxs.length ? mIdxs[0] : i0;
@@ -1033,14 +1070,19 @@ function sliceTimelineDay() {
   renderCondAt(state.tlIdx);
   renderTimelineGraph();
   syncTlDayNav();
+  // the map can already be showing the wind/current field before this first
+  // resolves (e.g. the app reopens straight into the wind view, since that
+  // was the last thing shown) - whichever layer is live retries its own
+  // fetch now that there's a valid hour to fetch data for. Cheap no-op via
+  // the key check in _load() if it already has this exact data.
+  if (currentLayer) currentLayer.refresh();
+  if (windLayer) windLayer.refresh();
 }
 function stepTlDay(delta) {
   const nd = Math.max(TL_DAY_MIN, Math.min(TL_DAY_MAX, state.tlDay + delta));
   if (nd === state.tlDay) return;
   state.tlDay = nd; state.tlIdx = null;
-  sliceTimelineDay();
-  if (currentLayer) currentLayer.refresh();
-  if (windLayer) windLayer.refresh();
+  sliceTimelineDay(); // also refreshes currentLayer/windLayer itself
 }
 function syncTlDayNav() {
   const label = $('#tlDayLabel'); if (label) label.textContent = dayLabelFor(state.tlDay);
